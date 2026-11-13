@@ -10,12 +10,12 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from .db import get_db
 from .models import (
-    Act, Asset, Attachment, BoardEvent, Contract, Event, Idempotency, Organization,
+    Act, Asset, Attachment, AuthAttempt, BoardEvent, Contract, Event, Idempotency, Organization,
     Outbox, Pause, Shift, Site, SLAPolicy, Ticket, User, Worklog, now
 )
 from .security import (
@@ -122,6 +122,9 @@ def idempotency(db, user, route, key, body, create=None):
     if not key or len(key) > 80:
         raise HTTPException(400, detail="Требуется заголовок Idempotency-Key до 80 символов")
     digest = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+    if db.bind.dialect.name == "postgresql":
+        lock_key = int.from_bytes(hashlib.sha256((user.id + route + key).encode()).digest()[:8], "big", signed=True)
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
     old = db.scalar(select(Idempotency).where(
         Idempotency.actor_id == user.id, Idempotency.route == route,
         Idempotency.client_uuid == key))
@@ -135,10 +138,23 @@ def idempotency(db, user, route, key, body, create=None):
     return result
 
 @router.post("/auth/login")
-def login(data: LoginInput, response: Response, db: Session = Depends(get_db)):
-    u = db.scalar(select(User).where(User.email == data.email.strip().lower()))
+def login(data: LoginInput, response: Response, request: Request, db: Session = Depends(get_db)):
+    email = data.email.strip().lower()
+    remote = request.client.host if request.client else "unknown"
+    fingerprint = hashlib.sha256((remote + "|" + email).encode()).hexdigest()
+    cutoff = now() - timedelta(minutes=15)
+    db.query(AuthAttempt).filter(AuthAttempt.created_at < cutoff).delete(synchronize_session=False)
+    failures = db.scalar(select(func.count(AuthAttempt.id)).where(AuthAttempt.fingerprint == fingerprint)) or 0
+    if failures >= 5:
+        db.commit()
+        raise HTTPException(429, detail="Слишком много попыток. Повторите вход через 15 минут")
+    u = db.scalar(select(User).where(User.email == email))
     if not u or not u.active or not verify_password(data.password, u.password_hash):
+        db.add(AuthAttempt(fingerprint=fingerprint, created_at=now()))
+        db.commit()
         raise HTTPException(401, detail="Неверный логин или пароль")
+    db.query(AuthAttempt).filter(AuthAttempt.fingerprint == fingerprint).delete(synchronize_session=False)
+    db.commit()
     secure = os.getenv("COOKIE_SECURE", "0") == "1"
     response.set_cookie("fp_session", signer().dumps(u.id), max_age=43200,
                         httponly=True, secure=secure, samesite="lax", path="/")
@@ -301,6 +317,7 @@ def assign(ticket_id: str, data: AssignInput, user: User = Depends(roles(*STAFF)
     t = ticket_for(db, user, t)
     require_version(t, data.version)
     require_status(t, "new", "triage", "returned")
+    db.scalar(select(User).where(User.id == data.engineer_id).with_for_update())
     candidate = next((r for r in rank_engineers(db, t) if r["id"] == data.engineer_id), None)
     if not candidate or not candidate["eligible"]:
         raise HTTPException(422, detail={"code": "ENGINEER_INELIGIBLE", "candidate": candidate})
@@ -550,7 +567,7 @@ async def board_events(request: Request, user: User = Depends(current_user)):
                     yield "id: %s\nevent: board\ndata: %s\n\n" % (event.id, json.dumps(
                         {"ticket_id": event.ticket_id, "kind": event.kind}))
             yield ": keepalive\n\n"
-            await asyncio.sleep(2)
+            await asyncio.sleep(0.7)
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 

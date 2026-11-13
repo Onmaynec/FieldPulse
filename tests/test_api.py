@@ -145,3 +145,19 @@ def test_worker_deduplicates_after_restart_and_policy_edit(env):
         db.commit()
         assert run_once(db)==0
         assert db.scalar(select(func.count(Event.id)).where(Event.type.like("sla_%_breached")))==2
+
+def test_percentile_single_value():
+    from app.api import percentile
+    assert percentile([17.25], 0.95)==17.25
+
+def test_foreign_tenant_cannot_open_act(env):
+    client,Session,ids=env
+    ca=signin(client,"a@test.local")
+    t=create_ticket(client,ids,ca).json()
+    with Session() as db:
+        item=Act(ticket_id=t["id"],version=1,status="pending",content={"work":[]})
+        db.add(item)
+        db.commit()
+        act_id=item.id
+    signin(client,"b@test.local")
+    assert client.get("/api/v1/acts/"+act_id).status_code==404

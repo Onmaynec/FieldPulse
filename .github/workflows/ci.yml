@@ -30,3 +30,27 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build application
         run: docker build -t fieldpulse:test .
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot entire stack
+        run: docker compose up -d --build
+      - name: Wait for API and check seeded data
+        shell: bash
+        run: |
+          for attempt in {1..50}; do
+            if curl -fsS http://localhost:8000/health/ready; then
+              break
+            fi
+            sleep 3
+          done
+          curl -fsS http://localhost:8000/health/ready
+          docker compose run --rm seed
+          docker compose exec -T api python -c "from app.db import SessionLocal; from app.models import Ticket,Site; from sqlalchemy import select,func; db=SessionLocal(); assert db.scalar(select(func.count(Ticket.id)))==2000; assert db.scalar(select(func.count(Site.id)))==120; db.close()"
+      - name: Show logs on error
+        if: failure()
+        run: docker compose logs --tail 150
+      - name: Shutdown
+        if: always()
+        run: docker compose down -v

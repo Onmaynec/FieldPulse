@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,13 @@ class Photo(BaseModel):
     data: str = Field(max_length=15000000)
 
 class Action(BaseModel):
+    @field_validator("client_at")
+    @classmethod
+    def timestamp_with_zone(cls, value):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("client_at requires timezone")
+        return value
+
     uuid: uuid.UUID
     ticket_id: str
     base_version: int = Field(ge=1)
