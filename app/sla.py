@@ -28,8 +28,9 @@ def deadline(start, minutes, calendar):
     if minutes == 0:
         return cursor
     zone = ZoneInfo(calendar["timezone"])
+    first_day = cursor.astimezone(zone).date()
     for offset in range(3660):
-        day = cursor.astimezone(zone).date() + timedelta(days=offset)
+        day = first_day + timedelta(days=offset)
         for a, b in intervals(day, calendar):
             if b <= cursor:
                 continue

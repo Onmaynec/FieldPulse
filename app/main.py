@@ -25,6 +25,7 @@ app.include_router(mobile_router)
 @app.middleware("http")
 async def trace(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID", "")[:80] or uuid.uuid4().hex
+    request.state.request_id = request_id
     started = time.perf_counter()
     try:
         result = await call_next(request)
@@ -50,7 +51,7 @@ async def http_error(request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content={
         "code": detail.get("code", "HTTP_%d" % exc.status_code) if isinstance(detail, dict) else "HTTP_%d" % exc.status_code,
         "message": detail if isinstance(detail, str) else "Операция не выполнена",
-        "requestId": request.headers.get("X-Request-ID", "")[:80],
+        "requestId": getattr(request.state, "request_id", ""),
         "details": detail if isinstance(detail, dict) else None,
     })
 
@@ -58,7 +59,7 @@ async def http_error(request: Request, exc: HTTPException):
 async def validation_error(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=422, content={
         "code": "VALIDATION_ERROR", "message": "Проверьте введённые данные",
-        "requestId": request.headers.get("X-Request-ID", "")[:80],
+        "requestId": getattr(request.state, "request_id", ""),
         "details": [{"loc": list(e["loc"]), "message": e["msg"]} for e in exc.errors()],
     })
 
@@ -81,3 +82,7 @@ app.mount("/static", StaticFiles(directory=PUBLIC), name="static")
 @app.get("/")
 def index():
     return FileResponse(PUBLIC / "index.html")
+
+@app.get("/sw.js")
+def service_worker():
+    return FileResponse(PUBLIC / "sw.js", media_type="application/javascript", headers={"Service-Worker-Allowed": "/"})

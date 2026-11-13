@@ -95,10 +95,11 @@ def sync(batch: Batch, user: User = Depends(roles("engineer")),
 
 @router.post("/tickets/{ticket_id}/attachments")
 async def upload_photo(ticket_id: str, file: UploadFile = File(...),
-                       user: User = Depends(roles("engineer")),
+                       user: User = Depends(current_user),
                        db: Session = Depends(get_db)):
     t = ticket_for(db, user, ticket_id)
-    if t.status not in ("accepted", "in_progress", "returned"):
+    allowed = ("new", "triage") if user.role == "client" else ("accepted", "in_progress", "returned")
+    if t.status not in allowed or user.role not in ("client", "engineer"):
         raise HTTPException(409, detail="Для заявки нельзя загружать фото")
     raw = await file.read(10 * 1024 * 1024 + 1)
     if len(raw) > 10 * 1024 * 1024:

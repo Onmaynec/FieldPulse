@@ -51,7 +51,8 @@ def env():
         ids={"a_site":sa.id,"a_asset":aa.id,"b_site":sb.id,"b_asset":ab.id,
              "engineer":engineer.id,"wrong":wrong.id,"policy":policy.id}
     def override():
-        with Session() as session:yield session
+        with Session() as session:
+            yield session
     app.dependency_overrides[get_db] = override
     with TestClient(app) as client:
         yield client,Session,ids

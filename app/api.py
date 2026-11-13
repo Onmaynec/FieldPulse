@@ -500,8 +500,10 @@ def percentile(values, fraction):
         return None
     values = sorted(values)
     k = (len(values) - 1) * fraction
-    a, b = int(k), min(len(values) - 1, int(k) + 1)
-    return round(values[a] * (b-k) + values[b] * (k-a), 2)
+    a = int(k)
+    b = min(len(values) - 1, a + 1)
+    portion = k - a
+    return round(values[a] * (1 - portion) + values[b] * portion, 2)
 
 @router.get("/reports/overview")
 def overview(user: User = Depends(roles(*STAFF)), db: Session = Depends(get_db)):
