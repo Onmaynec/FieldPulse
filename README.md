@@ -38,7 +38,7 @@ FieldPulse — диспетчеризация выездных инженеро�
 
 ## Технологии
 
-FastAPI / Python 3.12, SQLAlchemy, Alembic, PostgreSQL 16, MinIO, Service Worker, IndexedDB, SSE. Подписанные HttpOnly cookie, CSRF-токен, серверный RBAC. JSON API с документацией OpenAPI 3.x.
+FastAPI / Python 3.12, SQLAlchemy, Alembic, PostgreSQL 16, S3-совместимое хранилище SILO (поддерживаемый форк MinIO), Service Worker, IndexedDB, SSE. Подписанные HttpOnly cookie, CSRF-токен, серверный RBAC. JSON API с документацией OpenAPI 3.x.
 
 Демо-набор: 120 зданий, 600 единиц оборудования, 45 инженеров, 15 SLA-политик, 2000 заявок. Тестовые данные моделируют рабочий процесс; они не доказывают производительность.
 
@@ -59,3 +59,7 @@ FastAPI / Python 3.12, SQLAlchemy, Alembic, PostgreSQL 16, MinIO, Service Worker
 - docs/adr/0001-core-architecture.md — архитектурные компромиссы.
 
 Вне объёма первого релиза: дорожная навигация ETA, бухгалтерия, интеграция с АТС/IoT, фоновый GPS и нативные приложения.
+
+## Хранилище в Docker Compose
+
+Исторические образы MinIO перестали скачиваться из Docker Hub, а Quay отвечает 401 на анонимное скачивание. Поэтому для воспроизводимого запуска используется поддерживаемый форк MinIO — SILO. API использует протокол S3 без зависимости от бренда хранилища. Это отличие от буквального варианта инфраструктуры ТЗ.
