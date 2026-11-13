@@ -22,6 +22,7 @@ def seed(db):
     alpha = Organization(id=uid(), name="Бизнес-центры Север")
     beta = Organization(id=uid(), name="Коммерческие объекты Юг")
     db.add_all([service, alpha, beta])
+    db.flush()  # Organization rows must exist before users and sites.
     password = hash_password(os.getenv("DEMO_PASSWORD", "FieldPulseDemo!2026"))
     users = []
     for name, email, role, org in [
@@ -44,6 +45,7 @@ def seed(db):
                  skills=[engineer_skills[i % 3], engineer_skills[(i+1) % 3]])
         users.append(u)
     db.add_all(users)
+    db.flush()  # Shifts and tickets reference users.
     engineers = users[5:]
     current = now()
     for u in engineers:
@@ -61,6 +63,7 @@ def seed(db):
                       allowed_pauses=["awaiting_access", "awaiting_parts"])
         policies.append(p)
     db.add_all(policies)
+    db.flush()
     by_priority = {}
     for p in policies:
         by_priority.setdefault(p.priority, []).append(p)
@@ -85,11 +88,16 @@ def seed(db):
                                     "electrical":"Электрощит", "hvac":"Вентустановка",
                                     "low_voltage":"Контроллер"}[kind], j+1),
                                 kind=kind))
-    db.add_all(sites + assets + contracts)
+    db.add_all(sites)
+    db.flush()  # Explicit dependency order for PostgreSQL foreign keys.
+    db.add_all(assets)
+    db.add_all(contracts)
     db.flush()
     assets_by_site = {s.id: [a for a in assets if a.site_id == s.id] for s in sites}
     contract_by_site = {c.site_id: c for c in contracts}
     policy_by_id = {p.id: p for p in policies}
+    generated_tickets = []
+    generated_events = []
     for i in range(2000):
         site = sites[i % len(sites)]
         asset = rnd.choice(assets_by_site[site.id])
@@ -114,11 +122,15 @@ def seed(db):
                    started_at=created + delta + timedelta(minutes=5) if status in ("in_progress", "approval", "closed") else None,
                    finished_at=created + delta + timedelta(minutes=60) if status in ("approval", "closed") else None,
                    closed_at=created + delta + timedelta(minutes=90) if status == "closed" else None)
-        db.add(t)
-        db.add(Event(ticket_id=t.id, actor_id=t.creator_id, event_key="seed:"+str(i),
-                     type="ticket_created", at=created, data={"seed": True}))
+        generated_tickets.append(t)
+        generated_events.append(Event(ticket_id=t.id, actor_id=t.creator_id,
+                                      event_key="seed:"+str(i), type="ticket_created",
+                                      at=created, data={"seed": True}))
         if i % 9 == 0 and i > 120:
-            t.duplicate_of = "demo-reference"
+            t.duplicate_of = generated_tickets[i - 120].id
+    db.add_all(generated_tickets)
+    db.flush()  # Events cannot be inserted until the referenced tickets exist.
+    db.add_all(generated_events)
     db.commit()
     print("Seed: 120 объектов, 600 единиц оборудования, 45 инженеров, 15 SLA, 2000 заявок")
     print("Демо: admin@fieldpulse.local / dispatcher@fieldpulse.local / manager@fieldpulse.local")
