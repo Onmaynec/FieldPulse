@@ -1,0 +1,4 @@
+site_name,city,priority,reaction_minutes,resolution_minutes,working_days,working_start,working_end,allowed_pauses,holidays
+Центр Альфа,Москва,P1,30,240,0;1;2;3;4,09:00,18:00,awaiting_access;awaiting_parts,
+Центр Альфа,Москва,P2,60,480,0;1;2;3;4,09:00,18:00,awaiting_access;awaiting_parts,
+Центр Бета,Казань,P1,30,240,0;1;2;3;4,09:00,18:00,awaiting_access,

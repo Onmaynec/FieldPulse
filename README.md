@@ -42,6 +42,10 @@ FastAPI / Python 3.12, SQLAlchemy, Alembic, PostgreSQL 16, MinIO, Service Worker
 
 Демо-набор: 120 зданий, 600 единиц оборудования, 45 инженеров, 15 SLA-политик, 2000 заявок. Тестовые данные моделируют рабочий процесс; они не доказывают производительность.
 
+## Импорт CSV
+
+Начальная загрузка из CSV выполняется командой python -m app.import_csv sites/ assets/ contracts с путём к файлу. Порядок и схемы — docs/csv-import.md. Поддерживается --dry-run и откат файла при ошибке.
+
 ## Проверка
 
 Установить: pip install -r requirements-dev.txt. Запустить pytest -q, node --check public/app.js. В GitHub Actions выполняются проверки Python, JavaScript, тесты и сборка Docker-образа.

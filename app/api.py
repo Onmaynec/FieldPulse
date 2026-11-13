@@ -95,7 +95,8 @@ def emit(db, t, kind, actor=None, data=None, key=None):
     db.add(BoardEvent(org_id=t.org_id, ticket_id=t.id, kind=kind))
 
 def ticket_for(db, user, ticket_id):
-    return access_ticket(db, user, db.get(Ticket, ticket_id))
+    ticket = ticket_id if isinstance(ticket_id, Ticket) else db.get(Ticket, ticket_id)
+    return access_ticket(db, user, ticket)
 
 def get_contract(db, site_id):
     contract = db.scalar(select(Contract).where(Contract.site_id == site_id))
