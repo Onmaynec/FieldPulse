@@ -55,8 +55,16 @@ def main():
         assert page.evaluate("() => state.ticketData.total") > 0
 
         page.once("dialog", lambda dialog: dialog.accept())
-        page.locator('[data-delete-ticket-view="%s"]' % saved_id).click()
-        expect(page.locator('[data-ticket-view="%s"]' % saved_id)).to_have_count(0)
+        with page.expect_response(
+            lambda response: response.request.method == "DELETE"
+            and "/api/v1/tickets/views/" in response.url,
+            timeout=20000
+        ) as deleted:
+            page.locator('[data-delete-ticket-view="%s"]' % saved_id).click()
+        assert deleted.value.status == 200, (
+            "Server rejected view deletion: %s" % deleted.value.status
+        )
+        expect(page.locator('[data-ticket-view="%s"]' % saved_id)).to_have_count(0, timeout=15000)
         assert page.evaluate("() => state.ticketViews.length") == 0
         assert not errors, errors
         context.close()

@@ -61,6 +61,7 @@ jobs:
           python scripts/visual_e2e.py
           python scripts/registry_e2e.py
           python scripts/cursor_e2e.py
+          python scripts/incidents_e2e.py
           docker compose exec -T api python -m app.backup create /tmp/fieldpulse-ci-backup.zip
           docker compose exec -T api python -m app.backup verify /tmp/fieldpulse-ci-backup.zip
           docker compose exec -T api python -m app.maintenance --limit 10
@@ -99,5 +100,43 @@ jobs:
         if: failure()
         run: docker compose logs --tail 150
       - name: Shutdown
+        if: always()
+        run: docker compose down -v
+
+  large-search-benchmark:
+    # Deliberately separate from the API smoke test. These are real, resource-
+    # consuming PostgreSQL profiles with rollback, never a production run.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start dedicated performance database
+        run: |
+          docker compose up -d --build postgres migrate api
+          docker compose run --rm seed
+      - name: Benchmark 50,000 synthetic + seeded tickets
+        run: |
+          docker compose exec -T api python -m scripts.search_plan --generate 50000 --allow-demo-write --expected-min 52000 --repeats 3 --output /tmp/fieldpulse-50k.json
+          docker cp "$(docker compose ps -q api):/tmp/fieldpulse-50k.json" fieldpulse-50k.json
+          docker compose exec -T api python -c "from app.db import SessionLocal; from app.models import Ticket; from sqlalchemy import select,func; db=SessionLocal(); assert db.scalar(select(func.count(Ticket.id)))==2000; db.close()"
+      - name: Benchmark 200,000 synthetic + seeded tickets
+        run: |
+          docker compose exec -T api python -m scripts.search_plan --generate 200000 --allow-demo-write --expected-min 202000 --repeats 3 --output /tmp/fieldpulse-200k.json
+          docker cp "$(docker compose ps -q api):/tmp/fieldpulse-200k.json" fieldpulse-200k.json
+          docker compose exec -T api python -c "from app.db import SessionLocal; from app.models import Ticket; from sqlalchemy import select,func; db=SessionLocal(); assert db.scalar(select(func.count(Ticket.id)))==2000; db.close()"
+      - name: Publish large PostgreSQL query plans
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fieldpulse-v07-query-scale
+          path: |
+            fieldpulse-50k.json
+            fieldpulse-200k.json
+          if-no-files-found: warn
+      - name: Show database errors
+        if: failure()
+        run: docker compose logs --tail 180 postgres migrate api
+      - name: Remove dedicated benchmark volumes
         if: always()
         run: docker compose down -v

@@ -1,5 +1,5 @@
-const CACHE = "fieldpulse-shell-v6";
-const SHELL = ["/", "/static/styles.css?v=0.6.0", "/static/app.js?v=0.6.0", "/static/icon.svg", "/static/manifest.webmanifest"];
+const CACHE = "fieldpulse-shell-v7";
+const SHELL = ["/", "/static/styles.css?v=0.7.0", "/static/app.js?v=0.7.0", "/static/icon.svg", "/static/manifest.webmanifest"];
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
 });

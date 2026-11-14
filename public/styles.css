@@ -376,3 +376,21 @@ input[type=file]::file-selector-button{background:var(--soft-accent);color:var(-
 .worker-measures b{display:block;font-size:12px;margin-top:4px;color:var(--ink);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .worker-monitor>.btn{justify-self:start}
 @media(max-width:480px){.worker-measures{grid-template-columns:1fr}}
+
+
+/* v0.7: independent SLA incident review and operator acknowledgements */
+.incident-center{display:grid;gap:15px}
+.incident-topline{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.incident-topline>div{display:grid;gap:4px}
+.incident-topline strong{font-size:15px}
+.incident-topline small,.incident-entry small{color:var(--muted);font-size:11px}
+.incident-alert{color:var(--red)}.incident-calm{color:var(--green)}
+.incident-delivery{display:flex;gap:9px;flex-wrap:wrap}
+.incident-delivery span{font-size:11px;color:var(--sub);padding:8px 10px;border:1px solid var(--line);background:var(--surface-alt);border-radius:9px}
+.incident-delivery b{font-variant-numeric:tabular-nums}
+.incident-history{display:grid;gap:7px}
+.incident-entry{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--line);padding:13px;border-radius:11px;min-width:0}
+.incident-entry>div{display:grid;gap:6px;min-width:0}
+.incident-entry-title{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
+.incident-entry-title>b{font-size:11px;color:var(--sub)}
+@media(max-width:520px){.incident-entry{flex-wrap:wrap}.incident-entry .btn{width:100%}}
