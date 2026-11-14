@@ -18,7 +18,7 @@ from .reporting import router as reports_router
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(message)s")
 logger = logging.getLogger("fieldpulse")
-app = FastAPI(title="FieldPulse", version="0.5.0",
+app = FastAPI(title="FieldPulse", version="0.6.0",
               description="Диспетчеризация инженеров, SLA и офлайн-синхронизация",
               docs_url="/api/docs", redoc_url=None)
 app.include_router(api_router)
