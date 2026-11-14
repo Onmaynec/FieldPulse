@@ -842,7 +842,7 @@ document.addEventListener("keydown",e=>{
     e.preventDefault();$("#global-search").click();return;
   }
   if(e.key==="Tab"&&dialog){
-    const focusable=$('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',dialog)
+    const focusable=Array.from(dialog.querySelectorAll('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'))
       .filter(el=>el.getClientRects().length>0);
     if(!focusable.length)return;
     const first=focusable[0],last=focusable[focusable.length-1];
