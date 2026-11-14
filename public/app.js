@@ -104,6 +104,8 @@ function actsPage(){
 function reportsPage(){
   const r=state.report||{total:0,open:0,breached_percent:0,repeat_percent:0,load:[]};
   const load=r.load||[];const max=Math.max(...load.map(a=>a.count),1);
+  const sites=[...(state.siteReport?.sites||[])].sort((a,b)=>b.breach_count-a.breach_count||b.total-a.total).slice(0,30);
+  const ops=state.operations||{};
   return pageHead("СЕРВИСНАЯ АНАЛИТИКА","Качество под контролем","Реальные показатели заявок, нарушений и текущей загрузки.")+
     '<div class="stats">'+stat("Время реакции p50",r.reaction_p50_minutes??"—","минут","◷")+
     stat("Время реакции p95",r.reaction_p95_minutes??"—","минут","◴")+
@@ -115,7 +117,12 @@ function reportsPage(){
     panel("Состояние данных","Показатели, рассчитанные по базе",
     '<div class="panel-body"><div class="activity">'+[
       ["Обращений всего",r.total],["Активных заявок",r.open],["С нарушениями",r.breached_count],["Повторных обращений",r.repeat_count]
-    ].map(x=>'<div class="activity-item"><span class="activity-dot">↗</span><div><b>'+x[0]+'</b><small>'+x[1]+'</small></div></div>').join("")+'</div></div>')+'</div>';
+    ].map(x=>'<div class="activity-item"><span class="activity-dot">↗</span><div><b>'+x[0]+'</b><small>'+x[1]+'</small></div></div>').join("")+'</div></div>')+'</div>'+
+    panel("SLA по объектам","Список приоритетных объектов с нарушениями",'<div class="table-wrap"><table class="table"><thead><tr><th>ОБЪЕКТ</th><th>ЗАЯВКИ</th><th>НАРУШЕНИЯ</th><th>РЕАКЦИЯ P95</th></tr></thead><tbody>'+
+      sites.map(s=>'<tr><td>'+safe(s.site)+'</td><td>'+s.total+'</td><td>'+s.breach_count+' ('+s.breach_percent+'%)</td><td>'+safe(s.reaction_p95_minutes??"—")+' мин</td></tr>').join("")+'</tbody></table></div>')+
+    panel("Операционное состояние","Исторические события и локальный mock inbox",'<div class="panel-body"><div class="activity">'+
+      [["Активные паузы SLA",ops.active_sla_pauses],["Незавершённые заявки",ops.open_tickets],["Зарегистрированные нарушения",ops.recorded_breach_events],["Сообщения без внешней доставки",ops.pending_mock_notifications]].map(x=>
+      '<div class="activity-item"><span class="activity-dot">◉</span><div><b>'+x[0]+'</b><small>'+safe(x[1]??"—")+'</small></div></div>').join("")+'</div></div>');
 }
 function inboxPage(){
   const notifications=state.notifications||[];
@@ -160,6 +167,7 @@ async function details(id){
   function action(label,key,style="btn-outline"){buttons.push('<button class="btn '+style+'" data-task-action="'+key+'">'+label+'</button>');}
   if(canStaff&&t.status==="new")action("Взять в триаж","triage");
   if(canStaff&&["new","triage","returned"].includes(t.status))action("Назначить инженера","assign","btn-primary");
+  if(canStaff)action("Сверка SLA","reconcile");
   if(isEngineer&&t.status==="assigned")action("Принять заявку","accept","btn-primary");
   if(isEngineer&&["accepted","returned"].includes(t.status))action("Начать работы","start","btn-primary");
   if(canStaff&&["assigned","accepted","in_progress"].includes(t.status))action("Пауза SLA","pause");
@@ -290,20 +298,20 @@ async function adminPolicyModal(){
   const existing=await api("/admin/contracts/"+encodeURIComponent(siteId));
   const week=existing.calendar?.week||Object.fromEntries(Array.from({length:5},(_,i)=>[String(i),[["09:00","18:00"]]]));
   const policy=existing.policies?.P1||{reaction_minutes:30,resolution_minutes:240,allowed_pauses:["awaiting_access"]};
+  state.adminContract=existing;
   const dayNames=["Понедельник","Вторник","Среда","Четверг","Пятница","Суббота","Воскресенье"];
   const form='<form id="admin-policy-form" data-site="'+safe(siteId)+'" class="form-stack">'+
-    '<label>Приоритет<select name="priority">'+["P1","P2","P3","P4"].map(x=>
+    '<label>Приоритет<select name="priority" id="admin-priority-select">'+["P1","P2","P3","P4"].map(x=>
       '<option value="'+x+'">'+x+'</option>').join("")+'</select></label>'+
     '<div class="form-grid"><div class="field"><label>Реакция, рабочих минут<input type="number" name="reaction_minutes" min="1" max="100800" value="'+policy.reaction_minutes+'" required></label></div>'+
     '<div class="field"><label>Решение, рабочих минут<input type="number" name="resolution_minutes" min="1" max="100800" value="'+policy.resolution_minutes+'" required></label></div></div>'+
     '<h3 class="subheading">РАБОЧИЙ КАЛЕНДАРЬ · '+safe(existing.timezone)+'</h3>'+
-    dayNames.map((name,index)=>{const entries=week[String(index)]||[],active=entries.length>0,start=entries[0]?.[0]||"09:00",end=entries[0]?.[1]||"18:00";
-      return '<div class="form-grid" style="align-items:center"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="day-'+index+'" '+(active?"checked":"")+'> '+name+'</label>'+
-      '<div class="form-grid"><div class="field"><input type="time" name="day-start-'+index+'" value="'+safe(start)+'"></div><div class="field"><input type="time" name="day-end-'+index+'" value="'+safe(end)+'"></div></div></div>';}).join("")+
+    dayNames.map((name,index)=>{const entries=week[String(index)]||[];
+      return '<label>'+name+'<input name="intervals-'+index+'" value="'+safe(entries.map(x=>x.join("-")).join(", "))+'" placeholder="09:00-12:00, 13:00-18:00"></label>';}).join("")+
     '<label>Выходные и праздники (YYYY-MM-DD через запятую)<textarea name="holidays" rows="2">'+safe((existing.calendar?.holidays||[]).join(", "))+'</textarea></label>'+
     '<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="awaiting_access" checked> Разрешить паузу «ожидание доступа»</label>'+
     '<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="awaiting_parts"> Разрешить паузу «ожидание деталей»</label>'+
-    '<p class="muted" style="font-size:11px">Форма поддерживает один интервал на день. Для сложных календарей используйте API, иначе предыдущие интервалы будут заменены.</p>'+
+    '<p class="muted" style="font-size:11px">Можно указать несколько интервалов через запятую, например 09:00-12:00, 13:00-18:00. Пустой день — выходной.</p>'+
     '<button class="btn btn-primary btn-wide" type="submit">Сохранить новую редакцию SLA ↗</button></form>';
   modal("Редактор политики SLA",form);
 }
@@ -339,8 +347,11 @@ async function dbOpen(databaseName){
 async function storeOp(name,mode,op){
   const db=await dbOpen();return new Promise((resolve,reject)=>{
     const tx=db.transaction(name,mode),obj=tx.objectStore(name),request=op(obj);
-    request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
-    tx.oncomplete=()=>db.close();
+    let value;
+    request.onsuccess=()=>{value=request.result;};
+    tx.oncomplete=()=>{db.close();resolve(value);};
+    tx.onabort=()=>{db.close();reject(tx.error||new Error("Локальная транзакция отклонена"));};
+    tx.onerror=()=>{};
   });
 }
 const dbAll=name=>storeOp(name,"readonly",o=>o.getAll());
@@ -354,7 +365,10 @@ async function migrateLegacy(){
   function readOld(name,mode,fn){
     return new Promise((resolve,reject)=>{
       const tx=old.transaction(name,mode),req=fn(tx.objectStore(name));
-      req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+      let value;
+      req.onsuccess=()=>{value=req.result;};
+      tx.oncomplete=()=>resolve(value);
+      tx.onabort=()=>reject(tx.error||new Error("Ошибка переноса старого черновика"));
     });
   }
   try{
@@ -384,15 +398,24 @@ async function sync(){
     if(state.user.role==="engineer"){
       await cacheTasks();
       const queue=await dbAll("queue");
-      if(queue.length){
-        const result=await api("/mobile/sync",{method:"POST",body:{actions:queue.filter(x=>!x.conflict).map(({conflict,...x})=>x)}});
-        for(const r of result.results){
-          const item=queue.find(x=>x.uuid===r.uuid);if(!item)continue;
-          if(["applied","duplicate"].includes(r.status))await dbDel("queue",item.uuid);
-          else {item.conflict=r.reason||r.status;item.server_version=r.server_version;item.server_status=r.server_status;await dbPut("queue",item);}
+      const pending=queue.filter(x=>!x.conflict).sort((a,b)=>String(a.client_at).localeCompare(String(b.client_at)));
+      if(pending.length){
+        let applied=0;
+        for(let offset=0;offset<pending.length;offset+=30){
+          const batch=pending.slice(offset,offset+30);
+          const result=await api("/mobile/sync",{method:"POST",body:{actions:batch.map(({conflict,server_version,server_status,...x})=>x)}});
+          for(const r of result.results){
+            const item=batch.find(x=>x.uuid===r.uuid);if(!item)continue;
+            if(["applied","duplicate"].includes(r.status)){
+              await dbDel("queue",item.uuid);applied+=1;
+            }else{
+              item.conflict=r.reason||r.status;item.server_version=r.server_version;
+              item.server_status=r.server_status;await dbPut("queue",item);
+            }
+          }
         }
-        toast("Синхронизация завершена. Принято: "+result.results.filter(x=>["applied","duplicate"].includes(x.status)).length);
-      }else toast("Данные задач актуальны");
+        toast("Синхронизация завершена. Подтверждено: "+applied+" из "+pending.length);
+      }else toast(queue.length?"Есть неразобранные конфликты":"Данные задач актуальны");
       state.tickets=await api("/tickets?limit=500");
       if(state.page==="mobile")$("#content").innerHTML=await mobilePage();
     }else {await refresh();}
@@ -421,6 +444,10 @@ async function refresh(){
     if(["admin","dispatcher","manager"].includes(role)){
       state.report=await api("/reports/overview");
       if(state.page==="inbox")state.notifications=await api("/notifications");
+      if(state.page==="reports"){
+        [state.siteReport,state.operations]=await Promise.all([
+          api("/reports/sites"),api("/reports/operations")]);
+      }
     }
     if(state.page==="acts")state.acts=await api("/acts");
     if(state.page==="admin" && role==="admin"){
@@ -509,6 +536,16 @@ document.addEventListener("click",async event=>{
     if(el.matches("[data-task-action]")){
       const action=el.dataset.taskAction,t=state.selected;
       if(action==="assign"){await assignment();return;}
+      if(action==="reconcile"){
+        const result=await api("/reports/tickets/"+t.id+"/reconcile");
+        modal("Аудит SLA #"+short(t.id),'<div class="detail-meta"><div><small>Рабочие минуты реакции</small><strong>'+safe(result.reaction_minutes??"—")+'</strong></div>'+
+          '<div><small>Рабочие минуты паузы</small><strong>'+safe(result.approved_pause_minutes)+'</strong></div>'+
+          '<div><small>Нарушение</small><strong>'+safe(result.recorded_violations.join(", ")||"Не зарегистрировано")+'</strong></div></div>'+
+          '<h3 class="subheading">ПОДТВЕРЖДЁННЫЕ ПАУЗЫ</h3>'+
+          (result.pauses.map(p=>'<p>'+safe(p.reason)+': '+date(p.started_at)+' — '+date(p.ended_at)+' ('+safe(p.working_minutes)+' мин)</p>').join("")||'<p class="muted">Пауз не было</p>')+
+          '<h3 class="subheading">ФАКТЫ</h3>'+result.timeline.map(x=>'<p><b>'+safe(x.type)+'</b> — '+date(x.at)+'</p>').join(""));
+        return;
+      }
       let body={version:t.version};
       if(action==="pause"){const reason=prompt("Причина паузы (awaiting_access / awaiting_parts)","awaiting_access");if(!reason)return;body.reason=reason;}
       if(action==="cancel"&&!confirm("Отменить заявку?"))return;
@@ -551,7 +588,16 @@ document.addEventListener("submit",async event=>{
     }
     if(form.id==="admin-policy-form"){
       const fd=new FormData(form),week={};
-      for(let i=0;i<7;i++)if(fd.has("day-"+i))week[String(i)]=[[String(fd.get("day-start-"+i)),String(fd.get("day-end-"+i))]];
+      const valid=/^([01]\d|2[0-3]):[0-5]\d$/;
+      for(let i=0;i<7;i++){
+        const raw=String(fd.get("intervals-"+i)||"").trim();
+        if(!raw)continue;
+        week[String(i)]=raw.split(",").map(part=>{
+          const pair=part.trim().split("-").map(s=>s.trim());
+          if(pair.length!==2||!pair.every(x=>valid.test(x)))throw new Error("Некорректный интервал для дня "+(i+1));
+          return pair;
+        });
+      }
       const holidays=String(fd.get("holidays")||"").split(",").map(x=>x.trim()).filter(Boolean);
       const payload={reaction_minutes:Number(fd.get("reaction_minutes")),resolution_minutes:Number(fd.get("resolution_minutes")),
         week,holidays,allowed_pauses:["awaiting_access","awaiting_parts"].filter(x=>fd.has(x))};
@@ -594,7 +640,16 @@ document.addEventListener("submit",async event=>{
     }
   }catch(err){$("#login-error").textContent=form.id==="login-form"?err.message:"";toast(err.message,true);}
 });
-document.addEventListener("change",e=>{if(e.target.id==="admin-site-select")state.adminSite=e.target.value;if(e.target.id==="new-site")loadAssets();if(e.target.id==="ticket-status-filter"){
+document.addEventListener("change",e=>{
+  if(e.target.id==="admin-priority-select"){
+    const policy=state.adminContract?.policies?.[e.target.value];
+    if(policy){
+      $('input[name="reaction_minutes"]',e.target.form).value=policy.reaction_minutes;
+      $('input[name="resolution_minutes"]',e.target.form).value=policy.resolution_minutes;
+      ['awaiting_access','awaiting_parts'].forEach(k=>$('input[name="'+k+'"]',e.target.form).checked=policy.allowed_pauses.includes(k));
+    }
+  }
+  if(e.target.id==="admin-site-select")state.adminSite=e.target.value;if(e.target.id==="new-site")loadAssets();if(e.target.id==="ticket-status-filter"){
   const value=e.target.value;$("#ticket-table").innerHTML=table(state.tickets.filter(t=>(!state.filter||JSON.stringify(t).toLowerCase().includes(state.filter.toLowerCase()))&&(!value||t.status===value)));}});
 document.addEventListener("input",e=>{if(e.target.id==="ticket-search"){
   state.filter=e.target.value;const selected=$("#ticket-status-filter")?.value;
