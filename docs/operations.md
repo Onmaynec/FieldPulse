@@ -64,7 +64,7 @@ PostgreSQL smoke запускается внутри API-контейнера:
 
 Суточный профиль для изолированной тестовой среды (200 заявок, 5 фотографий на каждую, 4 worker-потока, 24 часа, JPEG 1600×1200):
 
-    docker compose exec -T api python scripts/load_profile.py --tickets 200 --photos-per-ticket 5 --workers 4 --duration-hours 24 --photo-width 1600 --photo-height 1200 --photo-quality 86 --allow-writes --output /tmp/fieldpulse-24h.json
+    docker compose exec -T api python -m scripts.load_profile --tickets 200 --photos-per-ticket 5 --workers 4 --duration-hours 24 --photo-width 1600 --photo-height 1200 --photo-quality 86 --allow-writes --output /tmp/fieldpulse-24h.json
 
 Затем скопируйте отчёт: `docker cp "$(docker compose ps -q api):/tmp/fieldpulse-24h.json" ./fieldpulse-24h.json`. Скрипт распределяет создание заявок равномерно по заданному времени и записывает p50/p95, число ошибок, фактический размер фото, CPU, память, диск и параметры PostgreSQL. Запуск создаёт реальные заявки и S3-объекты; автоматического удаления нет. На production не запускать.
 
