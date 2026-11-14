@@ -72,10 +72,11 @@ def save_work(page, ticket_id, summary, with_photos=False):
 def main():
     client, dispatcher, engineer, ticket, email = prepare()
     with sync_playwright() as playwright:
-        with tempfile.TemporaryDirectory(prefix="fieldpulse-pwa-") as profile:
-            context = playwright.chromium.launch_persistent_context(
-                profile, headless=True, service_workers="allow"
-            )
+        profile_temp = tempfile.TemporaryDirectory(prefix="fieldpulse-pwa-")
+        profile = profile_temp.name
+        context = playwright.chromium.launch_persistent_context(
+            profile, headless=True, service_workers="allow"
+        )
         page = context.new_page()
         errors = []
         page.on("pageerror", lambda exc: errors.append(str(exc)))
@@ -149,7 +150,8 @@ def main():
         )
         assert_queue(page, 1)
         context.close()
-    print("Browser offline PWA: two photos, persistent queue, reconnect and safe conflict — OK")
+        profile_temp.cleanup()
+    print("Browser offline PWA: two photos, browser restart, reconnect and safe conflict — OK")
 
 
 if __name__ == "__main__":
