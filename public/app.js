@@ -2,7 +2,7 @@
 "use strict";
 const $ = (selector, scope = document) => scope.querySelector(selector);
 const $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(selector));
-const state = {user:null, page:"overview", tickets:[], sites:[], acts:[], report:null, selected:null, timeline:[], suggestions:[], filter:"", ticketStatus:"", ticketPriority:"", ticketSort:"newest", ticketPage:1, ticketPageSize:20, ticketData:{items:[],total:0,page:1,pages:0}, ticketViews:[], activeViewId:"", ticketRequestId:0, siteFilter:"", eventStream:null, localTasks:[]};
+const state = {user:null, page:"overview", tickets:[], sites:[], acts:[], report:null, selected:null, timeline:[], suggestions:[], filter:"", ticketStatus:"", ticketPriority:"", ticketSort:"newest", ticketPage:1, ticketPageSize:20, ticketData:{items:[],total:0,page:1,pages:0}, ticketViews:[], activeViewId:"", ticketRequestId:0, ticketMode:"offset", ticketCursors:[], board:null, siteFilter:"", eventStream:null, localTasks:[]};
 const UI_PREFS_KEY = "FieldPulseUIPreferencesV4";
 const prefs = (() => {try{return JSON.parse(localStorage.getItem(UI_PREFS_KEY)||"{}");}catch{return {};}})();
 const ui = {theme:prefs.theme==="dark"?"dark":"light", density:prefs.density==="compact"?"compact":"comfortable"};
@@ -87,84 +87,93 @@ function table(items){
 }
 
 function overview(){
-  const r=state.report;
-  const all=state.tickets;
+  const b=state.board||{total:0,open:0,closed:0,unassigned:0,overdue:0,due_soon:0,by_status:{},recent:[],upcoming:[]};
   const mine=state.user.role==="engineer";
-  const active=all.filter(t=>!["closed","cancelled"].includes(t.status));
   const headline=state.user.role==="client"?"Контроль обслуживания":mine?"Мои выездные задачи":"Сервис под контролем";
-  const header=pageHead("ОПЕРАЦИОННЫЙ ОБЗОР",headline,"Актуальные обращения, исполнители и сроки на одном экране.",
+  const header=pageHead("ОПЕРАЦИОННЫЙ ОБЗОР",headline,
+    "Вся доступная вашей роли база, а не ограниченная выборка последних заявок.",
     mine?'<button class="btn btn-primary" data-page="mobile">↗ Перейти к заданиям</button>':
     '<button class="btn btn-primary" data-create-ticket>＋ Создать заявку</button>');
   const summary='<div class="stats">'+
-    stat("Всего заявок",r?r.total:all.length,"В доступном вам реестре","▣")+
-    stat("Открытые",r?r.open:active.length,"Требуют выполнения","◷")+
-    stat("Закрыто",r?r.closed:all.filter(t=>t.status==="closed").length,"Работы завершены","✓")+
-    stat(r?"Нарушения SLA":"Не назначены",r?r.breached_percent+"%":active.filter(t=>!t.assignee_id).length,
-      r?"Доля заявок с нарушением":"Ожидают исполнителя","↗",true)+'</div>';
-  const upcoming=active.filter(t=>t.resolution_deadline).sort((a,b)=>new Date(a.resolution_deadline)-new Date(b.resolution_deadline)).slice(0,6);
-  const watchlist=panel("Под контролем","Ближайшие сроки из доступных загруженных заявок",
-    '<div class="watchlist">'+(upcoming.length?upcoming.map(t=>
+    stat("Всего заявок",b.total,"По вашей учётной записи","▣")+
+    stat("Открытые",b.open,"Требуют выполнения","◷")+
+    stat("Завершены",b.closed,"Работы подтверждены","✓")+
+    stat("Просрочено",b.overdue,"Активных, без паузы SLA","↗",true)+'</div>';
+  const watchlist=panel("Под контролем","Ближайшие сроки по всей доступной базе, исключая активные паузы",
+    '<div class="watchlist">'+(b.upcoming.length?b.upcoming.map(t=>
     '<button type="button" class="watchlist-row" data-ticket="'+safe(t.id)+'"><span class="watchlist-head"><b>#'+short(t.id)+'</b>'+
     priority(t.priority)+'</span><span class="watchlist-description">'+safe(t.site)+' · '+safe(t.asset)+'</span>'+
     '<span class="watchlist-date">'+date(t.resolution_deadline,t.timezone)+' · '+slaDeadline(t)+'</span></button>').join(""):
     '<div class="empty">Нет активных заявок со сроком SLA.</div>')+'</div>');
-  const recent=panel("Последние обращения","Последние изменения в доступном реестре",table(all.slice(0,7)),
+  const recent=panel("Последние обращения","Семь последних заявок из полной выборки",table(b.recent||[]),
     '<button class="btn btn-outline" data-page="tickets">Весь реестр ↗</button>');
-  const steps=["new","triage","assigned","accepted","in_progress","approval","closed"];
-  const total=Math.max(1,all.length);
-  const distribution=panel("Этапы обслуживания","Распределение загруженных заявок по статусам",
+  const steps=["new","triage","assigned","accepted","in_progress","approval","returned","closed","cancelled"];
+  const denominator=Math.max(1,b.total);
+  const distribution=panel("Этапы обслуживания","Агрегация всех доступных заявок в PostgreSQL",
     '<div class="panel-body"><div class="activity">'+steps.map(key=>{
-      const count=all.filter(t=>t.status===key).length;
+      const count=b.by_status?.[key]||0;
       return '<div class="activity-item"><span class="activity-dot">◦</span><div><b>'+STATUS[key]+'<span class="activity-total">'+count+'</span></b>'+
-      '<div class="progress-meter" role="progressbar" aria-label="'+STATUS[key]+'" aria-valuemin="0" aria-valuemax="'+all.length+'" aria-valuenow="'+count+'"><span style="width:'+Math.round(count/total*100)+'%"></span></div></div></div>';
+      '<div class="progress-meter" role="progressbar" aria-label="'+STATUS[key]+'" aria-valuemin="0" aria-valuemax="'+b.total+'" aria-valuenow="'+count+'"><span style="width:'+Math.round(count/denominator*100)+'%"></span></div></div></div>';
     }).join("")+'</div></div>');
   return header+summary+
-    '<div class="intro-banner"><div><span class="eyebrow">FIELD OPERATIONS / V0.4</span><h2>Вся работа — в едином потоке</h2>'+
-    '<p>Следите за изменениями заявок, документами, назначениями и SLA без переключения между системами.</p></div>'+
+    '<div class="intro-banner"><div><span class="eyebrow">FIELD OPERATIONS / V0.6</span><h2>Вся работа — в едином потоке</h2>'+
+    '<p>Ближайшие дедлайны, назначения и выполнение SLA теперь вычисляются сервером по всей доступной базе.</p>'+
+    '<p class="board-facts">P1 в работе: '+b.open_p1+' · Без исполнителя: '+b.unassigned+' · Истекают за час: '+b.due_soon+'</p></div>'+
     '<button class="btn btn-primary" data-page="'+(mine?"mobile":"tickets")+'">Открыть рабочий список ↗</button></div>'+
     '<div class="layout-two">'+recent+watchlist+'</div>'+distribution;
 }
-
 function ticketQuery(){
-  const q=new URLSearchParams({
-    page:String(state.ticketPage),page_size:String(state.ticketPageSize),
-    sort:state.ticketSort
-  });
-  if(state.filter.trim())q.set("q",state.filter.trim());
-  if(state.ticketStatus)q.set("status",state.ticketStatus);
-  if(state.ticketPriority)q.set("priority",state.ticketPriority);
-  return "/tickets/search?"+q.toString();
+  const query=new URLSearchParams({page_size:String(state.ticketPageSize),sort:state.ticketSort});
+  if(state.filter.trim())query.set("q",state.filter.trim());
+  if(state.ticketStatus)query.set("status",state.ticketStatus);
+  if(state.ticketPriority)query.set("priority",state.ticketPriority);
+  if(state.ticketMode==="seek"){
+    const token=state.ticketCursors[state.ticketCursors.length-1];
+    if(token)query.set("cursor",token);
+    return "/tickets/seek?"+query.toString();
+  }
+  query.set("page",String(state.ticketPage));
+  return "/tickets/search?"+query.toString();
 }
 async function loadTicketPage(){
   const token=++state.ticketRequestId;
   const data=await api(ticketQuery());
   if(token!==state.ticketRequestId)return;
   state.ticketData=data;
+  if(state.ticketMode==="seek")state.ticketPage=state.ticketCursors.length+1;
   if(state.page==="tickets")updateTicketResults();
 }
 function ticketResults(){
   const data=state.ticketData||{items:[],total:0,pages:0};
+  const seek=state.ticketMode==="seek";
   const total=data.total||0;
   const pages=Math.max(1,data.pages||1);
   const from=(state.ticketPage-1)*state.ticketPageSize;
-  const toolbar='<div class="table-toolbar"><div class="table-group"><span class="result-count">'+
-    (total?from+1:0)+'–'+Math.min(total,from+state.ticketPageSize)+' из '+total+' во всей доступной выборке</span>'+
-    '<span class="muted">· страницы запрашиваются с сервера</span></div><div class="toolbar-actions">'+
+  const label=seek
+    ?"Страница "+state.ticketPage+" · "+(data.items||[]).length+" записей · без COUNT"
+    :(total?from+1:0)+"–"+Math.min(total,from+state.ticketPageSize)+" из "+total+" в доступной выборке";
+  const pagesControl=seek
+    ?'<button type="button" class="btn btn-outline" data-seek-dir="prev" '+(state.ticketCursors.length===0?"disabled":"")+' aria-label="Назад по курсору">‹</button>'+
+     '<span class="result-count">Шаг '+state.ticketPage+'</span>'+
+     '<button type="button" class="btn btn-outline" data-seek-dir="next" '+(!data.has_more?"disabled":"")+' aria-label="Следующие заявки">›</button>'
+    :'<button type="button" class="btn btn-outline" data-ticket-page="'+(state.ticketPage-1)+'" '+(state.ticketPage<=1?"disabled":"")+' aria-label="Предыдущая страница">‹</button>'+
+     '<span class="result-count">'+state.ticketPage+' / '+pages+'</span>'+
+     '<button type="button" class="btn btn-outline" data-ticket-page="'+(state.ticketPage+1)+'" '+(state.ticketPage>=pages?"disabled":"")+' aria-label="Следующая страница">›</button>';
+  const toolbar='<div class="table-toolbar"><div class="table-group"><span class="result-count">'+label+'</span>'+
+    '<span class="muted">· '+(seek?"курсорная выдача":"нумерованные страницы")+'</span></div><div class="toolbar-actions">'+
     '<button type="button" class="btn btn-ghost" data-density="comfortable" aria-pressed="'+(ui.density==="comfortable")+'" title="Обычная плотность">Обычно</button>'+
     '<button type="button" class="btn btn-ghost" data-density="compact" aria-pressed="'+(ui.density==="compact")+'" title="Компактная таблица">Плотно</button>'+
-    '<button type="button" class="btn btn-outline" data-ticket-page="'+(state.ticketPage-1)+'" '+(state.ticketPage<=1?"disabled":"")+' aria-label="Предыдущая страница">‹</button>'+
-    '<span class="result-count">'+state.ticketPage+' / '+pages+'</span>'+
-    '<button type="button" class="btn btn-outline" data-ticket-page="'+(state.ticketPage+1)+'" '+(state.ticketPage>=pages?"disabled":"")+' aria-label="Следующая страница">›</button></div></div>';
+    pagesControl+'</div></div>';
   return table(data.items||[])+toolbar;
 }
 function updateTicketResults(){
   const element=$("#ticket-table");if(!element)return;
   element.innerHTML=ticketResults();
-  const count=$("#ticket-result-count");if(count)count.textContent=(state.ticketData?.total||0)+" найдено";
+  const count=$("#ticket-result-count");if(count)count.textContent=state.ticketMode==="seek"?"Быстрая выдача":(state.ticketData?.total||0)+" найдено";
   applyAppearance();
 }
 async function changeTicketQuery(){
-  state.ticketPage=1;state.activeViewId="";
+  state.ticketPage=1;state.ticketCursors=[];state.activeViewId="";
   const chips=$(".saved-views");if(chips)chips.outerHTML=viewOptions();
   const box=$("#ticket-table");if(box)box.innerHTML='<div class="registry-loading" role="status">Загрузка отфильтрованных заявок…</div>';
   try{await loadTicketPage();}
@@ -195,7 +204,11 @@ function ticketsPage(){
     ].map(([value,label])=>'<option value="'+value+'" '+(state.ticketSort===value?"selected":"")+'>'+label+'</option>').join("")+'</select>'+
     '<select id="ticket-page-size" aria-label="Записей на странице">'+[20,50,100].map(n=>
     '<option value="'+n+'" '+(state.ticketPageSize===n?"selected":"")+'>'+n+' на странице</option>').join("")+'</select>'+
-    '<span id="ticket-result-count" class="result-count">'+(state.ticketData?.total||0)+' найдено</span></div>'+
+    '<span id="ticket-result-count" class="result-count">'+(state.ticketMode==="seek"?"Быстрая выдача":(state.ticketData?.total||0)+" найдено")+'</span></div>'+
+    '<div class="registry-modes" role="group" aria-label="Режим навигации"><span>Навигация:</span>'+
+    '<button type="button" data-ticket-mode="offset" aria-pressed="'+(state.ticketMode==="offset")+'">Номера страниц</button>'+
+    '<button type="button" data-ticket-mode="seek" aria-pressed="'+(state.ticketMode==="seek")+'">Быстрый просмотр</button>'+
+    '<small>'+(state.ticketMode==="seek"?"Без глубоких OFFSET; количество страниц не подсчитывается":"Прямой переход по номерам страниц")+'</small></div>'+
     viewOptions()+
     '<div id="ticket-table">'+ticketResults()+'</div></div>';
 }
@@ -216,7 +229,7 @@ async function applyTicketView(id){
   state.ticketPriority=filters.priority||"";
   state.ticketSort=filters.sort||"newest";
   state.ticketPageSize=Number(filters.page_size||20);
-  state.ticketPage=1;
+  state.ticketPage=1;state.ticketCursors=[];
   const content=$("#content");if(content)content.innerHTML=ticketsPage();
   try{await loadTicketPage();}catch(err){toast(err.message,true);}
 }
@@ -680,17 +693,17 @@ async function refresh(){
   try{
     const role=state.user.role;
     const listing=state.page==="tickets";
-    const [sites,tickets]=await Promise.all([
-      api("/sites"),listing?Promise.resolve(null):api("/tickets?limit=500")
+    const [sites,board]=await Promise.all([
+      api("/sites"),state.page==="overview"?api("/board/summary"):Promise.resolve(null)
     ]);
     state.sites=sites;
-    if(!listing)state.tickets=tickets;
-    else {
+    if(board)state.board=board;
+    if(listing){
       const [result,views]=await Promise.all([api(ticketQuery()),api("/tickets/views")]);
       state.ticketData=result;state.ticketViews=views;
     }
     if(["admin","dispatcher","manager"].includes(role)){
-      state.report=await api("/reports/overview");
+      if(state.page==="reports")state.report=await api("/reports/overview");
       if(state.page==="inbox")state.notifications=await api("/notifications");
       if(state.page==="reports"){
         [state.siteReport,state.operations]=await Promise.all([
@@ -762,6 +775,7 @@ async function logout(){
   state.user=null;state.ticketViews=[];state.activeViewId="";
   state.filter="";state.ticketStatus="";state.ticketPriority="";
   state.ticketSort="newest";state.ticketPage=1;state.ticketPageSize=20;
+  state.ticketMode="offset";state.ticketCursors=[];state.board=null;
   sessionStorage.removeItem("fieldpulse-current-user");
   closeModal();viewAuth();
 }
@@ -791,6 +805,29 @@ document.addEventListener("click",async event=>{
     if(el.matches("[data-ticket-page]")){
       const previous=state.ticketPage;state.ticketPage=Number(el.dataset.ticketPage);
       try{await loadTicketPage();}catch(err){state.ticketPage=previous;toast(err.message,true);}
+      return;
+    }
+    if(el.matches("[data-ticket-mode]")){
+      state.ticketMode=el.dataset.ticketMode;
+      state.ticketPage=1;state.ticketCursors=[];
+      $("#content").innerHTML=ticketsPage();
+      await loadTicketPage();return;
+    }
+    if(el.matches("[data-seek-dir]")){
+      const previous=state.ticketCursors.slice();
+      if(el.dataset.seekDir==="next"){
+        const cursor=state.ticketData.next_cursor;
+        if(!cursor)return;
+        state.ticketCursors.push(cursor);
+      }else if(state.ticketCursors.length){
+        state.ticketCursors.pop();
+      }else return;
+      try{await loadTicketPage();}
+      catch(err){
+        state.ticketCursors=previous;
+        await loadTicketPage().catch(()=>{});
+        toast(err.message,true);
+      }
       return;
     }
     if(el.matches("[data-save-ticket-view]")){await openSaveTicketView();return;}
