@@ -767,8 +767,10 @@ async function refresh(){
     state.sites=sites;
     if(board)state.board=board;
     if(listing){
+      const revision=state.ticketViewRevision||0;
       const [result,views]=await Promise.all([api(ticketQuery()),api("/tickets/views")]);
-      state.ticketData=result;state.ticketViews=views;
+      state.ticketData=result;
+      if((state.ticketViewRevision||0)===revision)state.ticketViews=views;
     }
     if(["admin","dispatcher","manager"].includes(role)){
       if(state.page==="reports")state.report=await api("/reports/overview");
@@ -905,13 +907,17 @@ document.addEventListener("click",async event=>{
       const id=el.dataset.deleteTicketView;
       if(!confirm("Удалить сохранённое представление?"))return;
       await api("/tickets/views/"+encodeURIComponent(id),{method:"DELETE"});
-      // Resolve the final list from the server before repainting. The registry
-      // must never show a stale chip during asynchronous SSE table refreshes.
-      state.ticketViews=await api("/tickets/views");
+      // Repaint immediately after a committed delete. A second GET may be
+      // delayed by another registry/SSE request but must not revive this chip.
+      state.ticketViewRevision=(state.ticketViewRevision||0)+1;
+      state.ticketViews=state.ticketViews.filter(view=>view.id!==id);
       if(state.activeViewId===id){
         state.activeViewId="";state.ticketPage=1;state.ticketCursors=[];
       }
       const content=$("#content");if(content)content.innerHTML=ticketsPage();
+      const fresh=await api("/tickets/views");
+      state.ticketViews=fresh.filter(view=>view.id!==id);
+      if(content&&state.page==="tickets")content.innerHTML=ticketsPage();
       await loadTicketPage();
       toast("Представление удалено");return;
     }
