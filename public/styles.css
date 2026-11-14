@@ -367,3 +367,12 @@ input[type=file]::file-selector-button{background:var(--soft-accent);color:var(-
 .worker-status strong{font-size:12px}
 .worker-status .worker-status-ok{color:var(--green)}.worker-status .worker-status-alert{color:var(--red)}
 @media(max-width:640px){.registry-modes{padding:12px 14px}.registry-modes small{margin:4px 0 0;width:100%}}
+
+/* v0.6: persisted SLA worker telemetry */
+.worker-monitor{display:grid;gap:16px;padding-top:3px}
+.worker-measures{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.worker-measures>div{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--surface-alt);min-width:0}
+.worker-measures small{display:block;font-size:10px;color:var(--muted)}
+.worker-measures b{display:block;font-size:12px;margin-top:4px;color:var(--ink);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.worker-monitor>.btn{justify-self:start}
+@media(max-width:480px){.worker-measures{grid-template-columns:1fr}}

@@ -273,6 +273,33 @@ function actsPage(){
     summary+note+panel("Журнал актов",records.length+" доступных редакций",listing);
 }
 
+function workerMonitor(status){
+  const w=status||{};
+  const state=w.state||"unknown";
+  const labels={healthy:"Работает",stale:"Нет свежих циклов",error:"Ошибка обработки",unknown:"Нет данных"};
+  const tone=state==="healthy"?"worker-status-ok":"worker-status-alert";
+  return '<div class="worker-monitor" id="worker-monitor" role="status" aria-live="polite">'+
+    '<div class="worker-status"><span class="status '+(state==="healthy"?"accepted":"cancelled")+'">'+safe(labels[state]||state)+'</span>'+
+    '<strong class="'+tone+'">'+(w.seconds_since_success==null?"Нет подтверждённого прохода":
+      "Последний успех "+safe(w.seconds_since_success)+" сек назад")+'</strong></div>'+
+    '<div class="worker-measures">'+[
+      ["Успешный цикл",w.last_success_at?date(w.last_success_at):"Не было"],
+      ["Продолжительность",w.last_duration_ms==null?"—":w.last_duration_ms+" мс"],
+      ["Всего циклов",w.cycles??0],
+      ["Ошибок с момента запуска схемы",w.failures??0],
+      ["Порог устаревания",w.stale_after_seconds==null?"—":w.stale_after_seconds+" сек"],
+      ["Последняя ошибка",w.last_error_type||"Нет"],
+    ].map(x=>'<div><small>'+x[0]+'</small><b>'+safe(x[1])+'</b></div>').join("")+'</div>'+
+    '<button type="button" class="btn btn-outline btn-sm" data-refresh-worker>↻ Обновить состояние</button></div>';
+}
+async function refreshWorkerMonitor(){
+  if(!state.user||!["admin","dispatcher","manager"].includes(state.user.role))return;
+  const result=await api("/reports/worker-health");
+  state.operations=Object.assign({},state.operations||{}, {worker:result});
+  const element=$("#worker-monitor");
+  if(element)element.outerHTML=workerMonitor(result);
+}
+
 function reportsPage(){
   const r=state.report||{total:0,open:0,breached_percent:0,repeat_percent:0,load:[]};
   const load=[...(r.load||[])].sort((a,b)=>b.count-a.count).slice(0,18);const max=Math.max(...load.map(a=>a.count),1);
@@ -302,7 +329,9 @@ function reportsPage(){
        ["Возраст самой старой записи mock inbox",ops.oldest_pending_mock_age_seconds==null?"Очередь пуста":ops.oldest_pending_mock_age_seconds+" сек"],
        ["Последнее зафиксированное событие",ops.last_event_at?date(ops.last_event_at):"Нет событий"]
       ].map(x=>
-      '<div class="activity-item"><span class="activity-dot">◉</span><div><b>'+x[0]+'</b><small>'+safe(x[1]??"—")+'</small></div></div>').join("")+'</div></div>');
+      '<div class="activity-item"><span class="activity-dot">◉</span><div><b>'+x[0]+'</b><small>'+safe(x[1]??"—")+'</small></div></div>').join("")+'</div></div>')+
+    panel("SLA worker","Подтверждённые проходы и ошибки отдельно от событий SLA",
+      '<div class="panel-body">'+workerMonitor(ops.worker)+'</div>');
 }
 function inboxPage(){
   const notifications=state.notifications||[];
@@ -840,6 +869,7 @@ document.addEventListener("click",async event=>{
       if(state.activeViewId===id){state.activeViewId="";state.ticketPage=1;await loadTicketPage();}
       $("#content").innerHTML=ticketsPage();toast("Представление удалено");return;
     }
+    if(el.matches("[data-refresh-worker]")){await refreshWorkerMonitor();return;}
     if(el.matches("[data-close]")){closeModal();return;}
     if(el.matches("[data-create-ticket]")){await createTicketModal();return;}
     if(el.matches("[data-edit-policy]")){await adminPolicyModal();return;}
@@ -1043,3 +1073,8 @@ document.addEventListener("keydown",e=>{
 });
 applyAppearance();
 init().catch(err=>toast(err.message,true));
+// This lightweight poll refreshes the health widget without disrupting tables or forms.
+setInterval(()=>{
+  if(state.page==="reports"&&state.user&&navigator.onLine&&!document.hidden)
+    refreshWorkerMonitor().catch(()=>{});
+},20000);
