@@ -1,0 +1,56 @@
+name: CI
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements-dev.txt
+      - name: Compile Python
+        run: python -m compileall -q app tests migrations
+      - name: Check critical lint rules
+        run: ruff check app tests --select E4,E7,E9,F63,F7,F82
+      - name: Test
+        run: pytest -q
+      - name: Check JavaScript
+        run: node --check public/app.js
+      - name: Generate OpenAPI
+        run: python -c "from app.main import app; assert '/api/v1/mobile/sync' in app.openapi()['paths']"
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build application
+        run: docker build -t fieldpulse:test .
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot entire stack
+        run: docker compose up -d --build
+      - name: Wait for API and check seeded data
+        shell: bash
+        run: |
+          for attempt in {1..50}; do
+            if curl -fsS http://localhost:8000/health/ready; then
+              break
+            fi
+            sleep 3
+          done
+          curl -fsS http://localhost:8000/health/ready
+          docker compose run --rm seed
+          docker compose exec -T api python -c "from app.db import SessionLocal; from app.models import Ticket,Site; from sqlalchemy import select,func; db=SessionLocal(); assert db.scalar(select(func.count(Ticket.id)))==2000; assert db.scalar(select(func.count(Site.id)))==120; db.close()"
+      - name: Show logs on error
+        if: failure()
+        run: docker compose logs --tail 150
+      - name: Shutdown
+        if: always()
+        run: docker compose down -v

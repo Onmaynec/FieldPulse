@@ -1,0 +1,9 @@
+.git
+__pycache__
+.pytest_cache
+*.pyc
+.env
+.venv
+fieldpulse.db
+.coverage
+node_modules
