@@ -905,9 +905,15 @@ document.addEventListener("click",async event=>{
       const id=el.dataset.deleteTicketView;
       if(!confirm("Удалить сохранённое представление?"))return;
       await api("/tickets/views/"+encodeURIComponent(id),{method:"DELETE"});
-      state.ticketViews=state.ticketViews.filter(view=>view.id!==id);
-      if(state.activeViewId===id){state.activeViewId="";state.ticketPage=1;await loadTicketPage();}
-      $("#content").innerHTML=ticketsPage();toast("Представление удалено");return;
+      // Resolve the final list from the server before repainting. The registry
+      // must never show a stale chip during asynchronous SSE table refreshes.
+      state.ticketViews=await api("/tickets/views");
+      if(state.activeViewId===id){
+        state.activeViewId="";state.ticketPage=1;state.ticketCursors=[];
+      }
+      const content=$("#content");if(content)content.innerHTML=ticketsPage();
+      await loadTicketPage();
+      toast("Представление удалено");return;
     }
     if(el.matches("[data-refresh-worker]")){await refreshWorkerMonitor();return;}
     if(el.matches("[data-ack-incident]")){

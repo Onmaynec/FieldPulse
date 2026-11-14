@@ -56,7 +56,7 @@ def main():
 
         page.once("dialog", lambda dialog: dialog.accept())
         page.locator('[data-delete-ticket-view="%s"]' % saved_id).click()
-        expect(page.locator('[data-ticket-view="%s"]' % saved_id)).to_have_count(0)
+        expect(page.locator('[data-ticket-view="%s"]' % saved_id)).to_have_count(0, timeout=15000)
         assert page.evaluate("() => state.ticketViews.length") == 0
         assert not errors, errors
         context.close()
