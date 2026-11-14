@@ -70,10 +70,6 @@ services:
       timeout: 6s
       start_period: 35s
       retries: 2
-volumes:
-  postgres_data:
-  minio_data:
-
   monitor:
     build: .
     command: python -m app.monitor
@@ -87,3 +83,6 @@ volumes:
       timeout: 6s
       start_period: 40s
       retries: 2
+volumes:
+  postgres_data:
+  minio_data:
