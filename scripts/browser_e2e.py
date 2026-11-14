@@ -5,6 +5,7 @@ Requires Python Playwright and Chromium installed on the test runner.
 """
 import json
 import os
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -71,8 +72,10 @@ def save_work(page, ticket_id, summary, with_photos=False):
 def main():
     client, dispatcher, engineer, ticket, email = prepare()
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        context = browser.new_context(service_workers="allow")
+        with tempfile.TemporaryDirectory(prefix="fieldpulse-pwa-") as profile:
+            context = playwright.chromium.launch_persistent_context(
+                profile, headless=True, service_workers="allow"
+            )
         page = context.new_page()
         errors = []
         page.on("pageerror", lambda exc: errors.append(str(exc)))
@@ -112,6 +115,19 @@ def main():
         page.reload(wait_until="domcontentloaded")
         expect(page.locator('button[data-work-ticket="%s"]' % ticket["id"])).to_be_visible(timeout=15000)
         assert_queue(page, 1)
+        # Close the browser process entirely and reopen the same profile while
+        # offline. sessionStorage is gone; the scoped local identity and queue
+        # must still let the engineer review and preserve the pending action.
+        context.close()
+        context = playwright.chromium.launch_persistent_context(
+            profile, headless=True, service_workers="allow"
+        )
+        context.set_offline(True)
+        page = context.new_page()
+        page.goto(ROOT, wait_until="domcontentloaded", timeout=20000)
+        expect(page.locator("#shell")).to_be_visible(timeout=15000)
+        expect(page.locator('button[data-work-ticket="%s"]' % ticket["id"])).to_be_visible(timeout=15000)
+        assert_queue(page, 1)
         context.set_offline(False)
         page.evaluate("async () => await sync()")
         page.wait_for_function("async () => (await dbAll('queue')).length === 0", timeout=40000)
@@ -132,7 +148,7 @@ def main():
             timeout=30000
         )
         assert_queue(page, 1)
-        browser.close()
+        context.close()
     print("Browser offline PWA: two photos, persistent queue, reconnect and safe conflict — OK")
 
 

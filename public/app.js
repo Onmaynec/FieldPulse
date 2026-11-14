@@ -939,10 +939,14 @@ async function init(){
   updateNetwork();
   if("serviceWorker" in navigator)navigator.serviceWorker.register("/sw.js").catch(()=>{});
   try{state.user=await api("/auth/me");sessionStorage.setItem("fieldpulse-current-user",JSON.stringify(state.user));rememberOfflineIdentity(state.user);}
-  catch{if(!navigator.onLine){
-    try{state.user=JSON.parse(localStorage.getItem(OFFLINE_IDENTITY_KEY)||sessionStorage.getItem("fieldpulse-current-user")||"null");}
-    catch{state.user=null;}
-  }}
+  catch(error){
+    // navigator.onLine can remain true on captive portals and broken Wi-Fi.
+    // Only an explicit authentication rejection prevents local offline entry.
+    if(!error.status||error.status>=500){
+      try{state.user=JSON.parse(localStorage.getItem(OFFLINE_IDENTITY_KEY)||sessionStorage.getItem("fieldpulse-current-user")||"null");}
+      catch{state.user=null;}
+    }
+  }
   viewAuth();
   if(state.user){
     try{state.lastCached=localStorage.getItem("FieldPulseLastCached:"+state.user.id)||null;}catch{}
