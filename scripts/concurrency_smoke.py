@@ -18,7 +18,7 @@ from sqlalchemy import func, select
 from app.db import SessionLocal
 from app.models import Act, Attachment, Event, Outbox, Ticket, Worklog, now
 from app.worker import run_once
-from smoke import Browser
+from scripts.smoke import Browser
 
 
 def request_any(browser, method, path, payload):

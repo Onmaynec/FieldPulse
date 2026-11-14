@@ -62,7 +62,7 @@ jobs:
           python scripts/registry_e2e.py
           python scripts/cursor_e2e.py
           python scripts/incidents_e2e.py
-          docker compose exec -T api python scripts/concurrency_smoke.py
+          docker compose exec -T api python -m scripts.concurrency_smoke
           docker compose exec -T api python -m app.maintenance --limit 10
           docker compose exec -T api python scripts/load_profile.py --tickets 2 --photos-per-ticket 1 --workers 2 --duration-hours 0.0002 --photo-width 640 --photo-height 480 --allow-writes --output /tmp/fieldpulse-load.json
           docker cp "$(docker compose ps -q api):/tmp/fieldpulse-load.json" fieldpulse-load.json

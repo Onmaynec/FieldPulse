@@ -199,9 +199,7 @@ def verify_archive(path):
             raise ValueError("Unsupported backup format")
         members = manifest.get("members")
         if (not isinstance(members, dict)
-                or "postgres/database.dump" not in members
-                or not isinstance(manifest.get("bucket"), str)
-                or not manifest["bucket"]):
+                or "postgres/database.dump" not in members):
             raise ValueError("Invalid backup manifest")
         if set(names) != set(members) | {"manifest.json"}:
             raise ValueError("Archive and manifest list different entries")
