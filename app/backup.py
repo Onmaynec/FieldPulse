@@ -105,16 +105,22 @@ def database_report():
     present = set(inspector.get_table_names())
     expected = set(Base.metadata.tables)
     missing = expected - present
+    unexpected = present - expected - {"alembic_version"}
     if missing:
         raise RuntimeError("Restored schema is incomplete: " + ", ".join(sorted(missing)))
+    if unexpected:
+        raise RuntimeError("Restored schema contains unexpected tables: " +
+                           ", ".join(sorted(unexpected)))
+    if "alembic_version" not in present:
+        raise RuntimeError("Restored Alembic revision table is missing")
     with SessionLocal() as db:
         counts = {
             name: int(db.scalar(select(func.count()).select_from(Base.metadata.tables[name])) or 0)
             for name in sorted(expected)
         }
-        revision = None
-        if "alembic_version" in present:
-            revision = db.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        revision = db.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        if not revision:
+            raise RuntimeError("Restored Alembic revision is empty")
     return {"tables": counts, "alembic_revision": revision}
 
 
