@@ -14,15 +14,17 @@ from .db import SessionLocal
 from .api import router as api_router
 from .mobile import router as mobile_router
 from .admin import router as admin_router
+from .reporting import router as reports_router
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(message)s")
 logger = logging.getLogger("fieldpulse")
-app = FastAPI(title="FieldPulse", version="0.2.0",
+app = FastAPI(title="FieldPulse", version="0.3.0",
               description="Диспетчеризация инженеров, SLA и офлайн-синхронизация",
               docs_url="/api/docs", redoc_url=None)
 app.include_router(api_router)
 app.include_router(mobile_router)
 app.include_router(admin_router)
+app.include_router(reports_router)
 
 @app.middleware("http")
 async def trace(request: Request, call_next):
