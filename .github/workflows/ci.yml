@@ -62,10 +62,9 @@ jobs:
           python scripts/registry_e2e.py
           python scripts/cursor_e2e.py
           python scripts/incidents_e2e.py
-          docker compose exec -T api python -m app.backup create /tmp/fieldpulse-ci-backup.zip
-          docker compose exec -T api python -m app.backup verify /tmp/fieldpulse-ci-backup.zip
+          docker compose exec -T api python scripts/concurrency_smoke.py
           docker compose exec -T api python -m app.maintenance --limit 10
-          docker compose exec -T api python scripts/load_profile.py --tickets 2 --photos-per-ticket 1 --workers 2 --allow-writes --output /tmp/fieldpulse-load.json
+          docker compose exec -T api python scripts/load_profile.py --tickets 2 --photos-per-ticket 1 --workers 2 --duration-hours 0.0002 --photo-width 640 --photo-height 480 --allow-writes --output /tmp/fieldpulse-load.json
           docker cp "$(docker compose ps -q api):/tmp/fieldpulse-load.json" fieldpulse-load.json
           docker compose exec -T api python scripts/load_profile.py --tickets 200 --photos-per-ticket 5 --workers 8 --allow-writes --output /tmp/fieldpulse-load-target.json
           docker cp "$(docker compose ps -q api):/tmp/fieldpulse-load-target.json" fieldpulse-load-target.json
@@ -73,6 +72,23 @@ jobs:
           docker compose exec -T api python -m scripts.worker_restart_smoke await "$test_ticket"
           docker compose restart worker
           docker compose exec -T api python -m scripts.worker_restart_smoke verify "$test_ticket"
+          mkdir -p .recovery
+          chmod 0777 .recovery
+          docker compose stop api worker monitor
+          docker compose --profile maintenance run --rm backup-tool python -m scripts.recovery_probe snapshot /backups/source.json
+          docker compose --profile maintenance run --rm backup-tool python -m app.backup create /backups/fieldpulse-backup.zip --maintenance-confirmed
+          docker compose --profile maintenance run --rm backup-tool python -m app.backup verify /backups/fieldpulse-backup.zip
+          cp .recovery/fieldpulse-backup.zip .recovery/fieldpulse-backup-truncated.zip
+          truncate -s -128 .recovery/fieldpulse-backup-truncated.zip
+          if docker compose --profile maintenance run --rm backup-tool python -m app.backup verify /backups/fieldpulse-backup-truncated.zip; then
+            echo "A truncated backup was accepted"
+            exit 1
+          fi
+          docker compose -p fieldpulse-recovery --profile recovery up -d recovery-postgres recovery-minio
+          docker compose -p fieldpulse-recovery --profile recovery run --rm recovery-tool python -m scripts.recovery_probe init-bucket
+          docker compose -p fieldpulse-recovery --profile recovery run --rm recovery-tool python -m app.backup restore /recovery/fieldpulse-backup.zip --confirm-empty
+          docker compose -p fieldpulse-recovery --profile recovery up -d recovery-api
+          docker compose -p fieldpulse-recovery --profile recovery run --rm recovery-tool python -m scripts.recovery_probe verify /recovery/source.json
       - name: Publish load-profile artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -96,6 +112,19 @@ jobs:
           name: fieldpulse-v06-postgres-plans
           path: fieldpulse-search-plan.json
           if-no-files-found: ignore
+      - name: Store v0.8 recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fieldpulse-v08-recovery-drill
+          path: |
+            .recovery/source.json
+            .recovery/fieldpulse-backup.zip
+            .recovery/fieldpulse-backup-truncated.zip
+          if-no-files-found: warn
+      - name: Cleanup isolated recovery stack
+        if: always()
+        run: docker compose -p fieldpulse-recovery --profile recovery down -v --remove-orphans
       - name: Show logs on error
         if: failure()
         run: docker compose logs --tail 150
