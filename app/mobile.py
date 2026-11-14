@@ -52,7 +52,9 @@ def sync(batch: Batch, user: User = Depends(roles("engineer")),
     advanced = {}  # Track only versions applied in THIS batch; never silently rebase remote edits.
     for action in batch.actions:
         key = str(action.uuid)
-        fingerprint = hashlib.sha256(action.model_dump_json(exclude={"uuid"}).encode()).hexdigest()
+        canonical = json.dumps(action.model_dump(mode="json", exclude={"uuid"}),
+                               ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        fingerprint = hashlib.sha256(canonical.encode()).hexdigest()
         previous = db.scalar(select(Worklog).where(
             Worklog.engineer_id == user.id, Worklog.action_uuid == key))
         if previous:
@@ -63,6 +65,17 @@ def sync(batch: Batch, user: User = Depends(roles("engineer")),
                                 "server_at": fmt(previous.server_at)})
             continue
         t = db.scalar(select(Ticket).where(Ticket.id == action.ticket_id).with_for_update())
+        # Another worker may have committed the UUID while we waited for the row lock.
+        # Re-read after the lock to preserve duplicate semantics under concurrency.
+        concurrent = db.scalar(select(Worklog).where(
+            Worklog.engineer_id == user.id, Worklog.action_uuid == key))
+        if concurrent:
+            if concurrent.request_hash is not None and concurrent.request_hash != fingerprint:
+                results.append({"uuid": key, "status": "conflict", "reason": "UUID_REUSED_WITH_DIFFERENT_PAYLOAD"})
+            else:
+                results.append({"uuid": key, "status": "duplicate",
+                                "worklog_id": concurrent.id, "server_at": fmt(concurrent.server_at)})
+            continue
         if not t or t.assignee_id != user.id:
             results.append({"uuid": key, "status": "conflict", "reason": "NOT_ASSIGNED"})
             continue

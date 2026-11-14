@@ -4,6 +4,7 @@ Run with the full Compose stack and seed. The script uses only stdlib and PIL,
 so it runs directly inside the API container without test-only dependencies.
 """
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import io
 import json
 import os
@@ -110,8 +111,14 @@ def main():
             {"name": "after.jpg", "data": jpeg_data()}
         ]
     }
-    sync = engineer.request("POST", "/mobile/sync", {"actions": [action]})
-    assert sync["results"][0]["status"] == "applied", sync
+    # Both sessions send the same UUID at once; row locks must serialize the replay.
+    another_session = Browser()
+    another_session.login("engineer%d@fieldpulse.local" % engineer_num)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a = pool.submit(engineer.request, "POST", "/mobile/sync", {"actions": [action]})
+        b = pool.submit(another_session.request, "POST", "/mobile/sync", {"actions": [action]})
+        statuses = sorted([a.result()["results"][0]["status"], b.result()["results"][0]["status"]])
+    assert statuses == ["applied", "duplicate"], statuses
     duplicate = engineer.request("POST", "/mobile/sync", {"actions": [action]})
     assert duplicate["results"][0]["status"] == "duplicate"
     photos = engineer.request("GET", "/tickets/" + ticket["id"] + "/attachments")
@@ -129,7 +136,7 @@ def main():
     assert any(x["ticket_id"] == ticket["id"] and x["version"] == 2 and x["status"] == "draft"
                for x in revisions)
     print("FieldPulse smoke: client tenant isolation, idempotent creation, matching, "
-          "acceptance, 2 photos via S3, duplicate sync, act revisions — OK")
+          "acceptance, 2 photos via S3, concurrent duplicate sync, act revisions — OK")
 
 
 if __name__ == "__main__":

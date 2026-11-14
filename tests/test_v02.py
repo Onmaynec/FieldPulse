@@ -168,3 +168,16 @@ def test_working_minutes_used_in_reaction_report(env):
     assert report.status_code == 200, report.text
     assert report.json()["reaction_p50_minutes"] == 30
     assert report.json()["reaction_p95_minutes"] == 30
+
+
+def test_uuid_payload_dictionary_key_order_is_ignored(env):
+    client, Session, _ = env
+    t, csrf = assigned(env)
+    event = action(t["id"], t["version"])
+    event["checklist"] = {"isolation": True, "voltage": True}
+    first = post(client, "/mobile/sync", {"actions": [event]}, csrf)
+    assert first.json()["results"][0]["status"] == "applied"
+    equivalent = {**event, "checklist": {"voltage": True, "isolation": True}}
+    reply = post(client, "/mobile/sync", {"actions": [equivalent]}, csrf)
+    assert reply.status_code == 200
+    assert reply.json()["results"][0]["status"] == "duplicate"
