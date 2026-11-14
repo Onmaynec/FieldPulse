@@ -26,6 +26,8 @@ def assert_no_horizontal_overflow(page, label):
 
 
 def capture(page, name):
+    # Capture the header and primary content, not a previously scrolled table.
+    page.evaluate("() => window.scrollTo({top: 0, behavior: 'instant'})")
     page.screenshot(path=str(OUTPUT / (name + ".png")), full_page=False,
                     animations="disabled", caret="hide")
 
@@ -90,6 +92,7 @@ def test_role(browser, role, email):
         capture(page, "desktop-" + role + "-tickets-dark")
         page.reload(wait_until="domcontentloaded")
         expect(page.locator("#shell")).to_be_visible(timeout=20000)
+        expect(page.locator(".page-head h1")).to_be_visible(timeout=20000)
         assert page.locator("html").get_attribute("data-theme") == "dark", "Theme not persisted"
         # New tab starts from an overview, user remains logged in via cookie.
         page.locator('button[data-theme="light"]').last.click()
@@ -97,6 +100,7 @@ def test_role(browser, role, email):
 
         page.set_viewport_size({"width": 390, "height": 844})
         assert_no_horizontal_overflow(page, role + " mobile")
+        expect(page.locator(".page-head h1")).to_be_visible()
         page.locator("#menu-toggle").click()
         expect(page.locator("#sidebar")).to_have_class("sidebar open")
         assert page.locator("#menu-toggle").get_attribute("aria-expanded") == "true"

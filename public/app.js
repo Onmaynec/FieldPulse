@@ -627,6 +627,13 @@ async function refresh(){
 }
 async function setPage(page){
   if(!navItems().includes(page))page="overview";
+  const content=$("#content");
+  if(content&&!content.children.length){
+    content.innerHTML='<div class="page-loading" role="status" aria-live="polite"><span class="section-kicker">ЗАГРУЗКА РАБОЧЕГО РАЗДЕЛА</span>'+
+      '<div class="skeleton skeleton-title"></div><div class="skeleton skeleton-subtitle"></div>'+
+      '<div class="skeleton-grid"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div>'+
+      '<div class="skeleton skeleton-card"></div></div></div>';
+  }
   state.page=page;state.filter="";
   setIdentity();
   if(page==="mobile"){try{$("#content").innerHTML=await mobilePage();}catch(err){toast(err.message,true);}}

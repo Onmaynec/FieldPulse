@@ -321,3 +321,15 @@ input[type=file]::file-selector-button{background:var(--soft-accent);color:var(-
 .intro-banner .eyebrow{font-size:10px;color:#aebaff}
 .intro-banner:has(.eyebrow) h2{margin-top:8px}
 @media(max-width:480px){.watchlist{padding:0 10px 12px}.watchlist-row{padding:14px 8px}}
+
+/* Initial data loading is intentional, never an empty white canvas. */
+.page-loading{padding:16px 0 0;min-height:240px}
+.page-loading .section-kicker{margin-bottom:23px}
+.skeleton{position:relative;overflow:hidden;border-radius:11px;background:var(--surface-alt);border:1px solid var(--line);min-width:0}
+.skeleton:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(132,147,182,.09),transparent);transform:translateX(-100%);animation:skeleton-sheen 1.3s ease-in-out infinite}
+.skeleton-title{width:min(390px,82%);height:36px;margin-bottom:13px}
+.skeleton-subtitle{width:min(550px,95%);height:17px;margin-bottom:27px}
+.skeleton-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.skeleton-card{height:135px}
+@keyframes skeleton-sheen{to{transform:translateX(100%)}}
+@media(max-width:800px){.skeleton-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.skeleton-card:last-child{display:none}}
