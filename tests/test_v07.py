@@ -8,6 +8,7 @@ from app.models import IncidentDelivery, MonitorCycle, OperationalIncident, Work
 from app.monitor import (deliver_pending, monitor_snapshot, monitor_tick,
                          webhook_url)
 from app.worker_health import record_cycle
+from app.sla import aware
 from conftest import signin
 
 
@@ -77,7 +78,7 @@ def test_webhook_retries_and_recovery_notice_no_private_fields(env):
         row = db.scalar(select(IncidentDelivery))
         assert row.attempts == 1 and row.sent_at is None
         assert row.last_error_type == "TimeoutError"
-        assert row.next_attempt_at > now_at
+        assert aware(row.next_attempt_at) > now_at
         assert "SECRET:" not in str(row.last_error_type)
         assert deliver_pending(db, "https://alerts.example.net/receiver",
                                at=now_at + timedelta(seconds=1),
