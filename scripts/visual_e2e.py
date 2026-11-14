@@ -111,6 +111,7 @@ def test_role(browser, role, email):
             # Engineer's PWA is also covered by scripts/browser_e2e.py with offline mutations.
             page.locator("#menu-toggle").click()
             page.locator('.nav-item[data-page="mobile"]').click()
+            expect(page.locator("#menu-toggle")).to_have_attribute("aria-expanded", "false", timeout=20000)
             expect(page.locator(".mobile-grid")).to_be_visible(timeout=20000)
             assert_no_horizontal_overflow(page, "engineer mobile tasks")
             capture(page, "mobile-engineer-field")

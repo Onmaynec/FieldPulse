@@ -639,6 +639,7 @@ async function refresh(){
 }
 async function setPage(page){
   if(!navItems().includes(page))page="overview";
+  if(window.innerWidth<=800)closeSidebar();
   const content=$("#content");
   if(content&&!content.children.length){
     content.innerHTML='<div class="page-loading" role="status" aria-live="polite"><span class="section-kicker">ЗАГРУЗКА РАБОЧЕГО РАЗДЕЛА</span>'+
@@ -650,7 +651,6 @@ async function setPage(page){
   setIdentity();
   if(page==="mobile"){try{$("#content").innerHTML=await mobilePage();}catch(err){toast(err.message,true);}}
   else {await refresh();}
-  if(window.innerWidth<=800)closeSidebar();
 }
 function render(){
   setIdentity();const el=$("#content");
