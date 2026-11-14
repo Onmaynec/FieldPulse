@@ -292,12 +292,49 @@ function workerMonitor(status){
     ].map(x=>'<div><small>'+x[0]+'</small><b>'+safe(x[1])+'</b></div>').join("")+'</div>'+
     '<button type="button" class="btn btn-outline btn-sm" data-refresh-worker>↻ Обновить состояние</button></div>';
 }
+function incidentCenter(){
+  const summary=state.incidentSummary||{};
+  const active=Number(summary.active_incidents||0);
+  const unack=Number(summary.unacknowledged||0);
+  const monitor=summary.monitor||{state:"unknown"};
+  const monitorLabel={healthy:"Наблюдение работает",stale:"Наблюдение остановилось",unknown:"Нет данных от наблюдения"};
+  const entries=(state.incidents||[]).slice(0,20);
+  return '<div id="incident-center" class="incident-center" aria-live="polite">'+
+    '<div class="incident-topline"><div><strong class="'+(active?"incident-alert":"incident-calm")+'">'+
+    (active?active+" активных инцидента(ов)":"Нет активных инцидентов")+'</strong>'+
+    '<small>'+unack+' неподтверждённых · '+safe(monitorLabel[monitor.state]||monitor.state)+
+    (monitor.seconds_since_success==null?"":" · "+monitor.seconds_since_success+" сек назад")+'</small></div>'+
+    '<button type="button" class="btn btn-outline btn-sm" data-refresh-worker>↻ Проверить</button></div>'+
+    '<div class="incident-delivery"><span>Вебхуки в очереди: <b>'+Number(summary.pending_webhook_deliveries||0)+'</b></span>'+
+    '<span>Повторные попытки: <b>'+Number(summary.retrying_webhook_deliveries||0)+'</b></span>'+
+    '<span>Подтверждённая отправка: <b>'+Number(summary.sent_webhook_deliveries||0)+'</b></span></div>'+
+    '<div class="incident-history">'+(entries.length?entries.map(item=>{
+      const closed=!!item.recovered_at;
+      const label=closed?"Восстановлен":({error:"Ошибка worker",stale:"Нет свежего цикла",unknown:"Worker не запускался"}[item.state]||item.state);
+      return '<div class="incident-entry"><div><div class="incident-entry-title">'+
+        '<span class="status '+(closed?"accepted":"cancelled")+'">'+safe(label)+'</span>'+
+        '<b>'+date(item.opened_at)+'</b></div>'+
+        '<small>'+safe(closed?"Восстановлен "+date(item.recovered_at):
+          "Нарушение работы SLA-worker")+
+        ' · '+(item.acknowledged?"Подтверждён оператором":"Ожидает подтверждения")+'</small></div>'+
+        (!item.acknowledged?'<button class="btn btn-outline btn-sm" type="button" data-ack-incident="'+
+         safe(item.id)+'">Подтвердить</button>':'')+'</div>';
+    }).join(""):'<div class="empty">Инцидентов пока нет. История появится после срабатывания наблюдения.</div>')+
+    '</div><p class="muted">Подтверждение фиксирует, что оператор увидел инцидент; оно не устраняет причину сбоя.</p>'+
+    '</div>';
+}
 async function refreshWorkerMonitor(){
   if(!state.user||!["admin","dispatcher","manager"].includes(state.user.role))return;
-  const result=await api("/reports/worker-health");
-  state.operations=Object.assign({},state.operations||{}, {worker:result});
-  const element=$("#worker-monitor");
-  if(element)element.outerHTML=workerMonitor(result);
+  const [worker,incidents,summary]=await Promise.all([
+    api("/reports/worker-health"),
+    api("/operations/incidents?limit=20"),
+    api("/operations/summary")
+  ]);
+  state.operations=Object.assign({},state.operations||{},{worker});
+  state.incidents=incidents;
+  state.incidentSummary=summary;
+  const widget=$("#worker-monitor");if(widget)widget.outerHTML=workerMonitor(worker);
+  const center=$("#incident-center");if(center)center.outerHTML=incidentCenter();
 }
 
 function reportsPage(){
@@ -331,7 +368,9 @@ function reportsPage(){
       ].map(x=>
       '<div class="activity-item"><span class="activity-dot">◉</span><div><b>'+x[0]+'</b><small>'+safe(x[1]??"—")+'</small></div></div>').join("")+'</div></div>')+
     panel("SLA worker","Подтверждённые проходы и ошибки отдельно от событий SLA",
-      '<div class="panel-body">'+workerMonitor(ops.worker)+'</div>');
+      '<div class="panel-body">'+workerMonitor(ops.worker)+'</div>')+
+    panel("Инциденты и оповещения","Журнал независимого наблюдения и состояния HTTPS-доставки",
+      '<div class="panel-body">'+incidentCenter()+'</div>');
 }
 function inboxPage(){
   const notifications=state.notifications||[];
@@ -735,8 +774,9 @@ async function refresh(){
       if(state.page==="reports")state.report=await api("/reports/overview");
       if(state.page==="inbox")state.notifications=await api("/notifications");
       if(state.page==="reports"){
-        [state.siteReport,state.operations]=await Promise.all([
-          api("/reports/sites"),api("/reports/operations")]);
+        [state.siteReport,state.operations,state.incidents,state.incidentSummary]=await Promise.all([
+          api("/reports/sites"),api("/reports/operations"),
+          api("/operations/incidents?limit=20"),api("/operations/summary")]);
       }
     }
     if(state.page==="acts")state.acts=await api("/acts");
@@ -870,6 +910,11 @@ document.addEventListener("click",async event=>{
       $("#content").innerHTML=ticketsPage();toast("Представление удалено");return;
     }
     if(el.matches("[data-refresh-worker]")){await refreshWorkerMonitor();return;}
+    if(el.matches("[data-ack-incident]")){
+      await api("/operations/incidents/"+encodeURIComponent(el.dataset.ackIncident)+"/ack",{method:"POST"});
+      await refreshWorkerMonitor();
+      toast("Инцидент отмечен как просмотренный");return;
+    }
     if(el.matches("[data-close]")){closeModal();return;}
     if(el.matches("[data-create-ticket]")){await createTicketModal();return;}
     if(el.matches("[data-edit-policy]")){await adminPolicyModal();return;}
