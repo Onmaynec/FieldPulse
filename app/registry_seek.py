@@ -41,7 +41,7 @@ def key_for(row, sort):
     if sort == "priority":
         return [row.priority, aware(row.resolution_deadline).isoformat(), row.id]
     if sort == "deadline":
-        return [row.resolution_deadline.isoformat(), row.id]
+        return [aware(row.resolution_deadline).isoformat(), row.id]
     return [aware(row.created_at).isoformat(), row.id]
 
 
