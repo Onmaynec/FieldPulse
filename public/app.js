@@ -2,10 +2,31 @@
 "use strict";
 const $ = (selector, scope = document) => scope.querySelector(selector);
 const $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(selector));
-const state = {user:null, page:"overview", tickets:[], sites:[], acts:[], report:null, selected:null, timeline:[], suggestions:[], filter:"", eventStream:null, localTasks:[]};
+const state = {user:null, page:"overview", tickets:[], sites:[], acts:[], report:null, selected:null, timeline:[], suggestions:[], filter:"", ticketStatus:"", ticketPriority:"", ticketSort:"newest", ticketPage:1, ticketPageSize:20, siteFilter:"", eventStream:null, localTasks:[]};
+const UI_PREFS_KEY = "FieldPulseUIPreferencesV4";
+const prefs = (() => {try{return JSON.parse(localStorage.getItem(UI_PREFS_KEY)||"{}");}catch{return {};}})();
+const ui = {theme:prefs.theme==="dark"?"dark":"light", density:prefs.density==="compact"?"compact":"comfortable"};
+function savePrefs(){try{localStorage.setItem(UI_PREFS_KEY,JSON.stringify(ui));}catch{}}
+function applyAppearance(){
+  document.documentElement.dataset.theme=ui.theme;
+  document.documentElement.classList.toggle("density-compact",ui.density==="compact");
+  $("[data-theme]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.theme===ui.theme)));
+  $("[data-density]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.density===ui.density)));
+}
+const ICON_PATH = {
+ overview:'<rect x="3" y="3" width="7" height="9" rx="1.4"/><rect x="14" y="3" width="7" height="5" rx="1.4"/><rect x="14" y="12" width="7" height="9" rx="1.4"/><rect x="3" y="16" width="7" height="5" rx="1.4"/>',
+ tickets:'<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01" stroke-width="3" stroke-linecap="round"/>',
+ sites:'<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 7h2m2 0h2M9 11h2m2 0h2M9 15h6m-5 6v-4h4v4"/>',
+ mobile:'<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+ acts:'<path d="M7 3h8l4 4v14H5V3h2"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+ reports:'<path d="M4 20V11m6 9V5m6 15v-9m4 9V8"/><path d="M2 20h20"/>',
+ inbox:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h5l2 3h4l2-3h5"/>',
+ admin:'<circle cx="12" cy="12" r="3"/><path d="m19 13 2-1-2-1-.5-2 1-2-2-2-2 1-2-.5-1-2-1 2-2 .5-2-1-2 2 1 2-.5 2-2 1 2 1 .5 2-1 2 2 2 2-1 2 .5 1 2 1-2 2-.5 2 1 2-2-1-2z"/>'
+};
+const glyph = name => '<svg class="nav-glyph" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'+ICON_PATH[name]+'</svg>';
+
 const ROLE = {admin:"Администратор",manager:"Руководитель",dispatcher:"Диспетчер",engineer:"Инженер",client:"Клиент"};
 const STATUS = {new:"Новая",triage:"Триаж",assigned:"Назначена",accepted:"Принята",in_progress:"В работе",approval:"Согласование",returned:"Возврат",closed:"Закрыта",cancelled:"Отменена"};
-const ICON = {overview:"◈",tickets:"▤",sites:"▦",mobile:"⬡",acts:"▣",reports:"◫",inbox:"◉",admin:"⚙"};
 const TITLE = {overview:"Обзор",tickets:"Заявки",sites:"Объекты",mobile:"Мобильное рабочее место",acts:"Акты выполненных работ",reports:"Аналитика",inbox:"Уведомления",admin:"Администрирование"};
 const CHECKS = {electrical:["isolation","voltage","result"],hvac:["filter","pressure","result"],low_voltage:["connection","signal","result"]};
 const CHECK_LABEL = {isolation:"Безопасное отключение",voltage:"Проверка напряжения",result:"Проверка результата",filter:"Состояние фильтра",pressure:"Давление системы",connection:"Подключение",signal:"Проверка сигнала",inspection:"Осмотр"};
@@ -35,8 +56,9 @@ function setIdentity(){
   $("#user-name").textContent=state.user.name;$("#user-role").textContent=ROLE[state.user.role]||state.user.role;
   $("#user-avatar").textContent=state.user.name.split(" ").map(v=>v[0]).slice(0,2).join("").toUpperCase();
   $("#today-label").textContent=new Intl.DateTimeFormat("ru-RU",{day:"numeric",month:"long",year:"numeric"}).format(new Date());
-  $("#navigation").innerHTML=navItems().map(p=>'<button class="nav-item '+(p===state.page?"active":"")+'" data-page="'+p+'"><span class="nav-icon">'+ICON[p]+'</span>'+TITLE[p]+'</button>').join("");
+  $("#navigation").innerHTML=navItems().map(p=>'<button type="button" class="nav-item '+(p===state.page?"active":"")+'" data-page="'+p+'" '+(p===state.page?'aria-current="page"':"")+'><span class="nav-icon">'+glyph(p)+'</span>'+TITLE[p]+'</button>').join("");
   $("#breadcrumb-current").textContent=TITLE[state.page];
+  applyAppearance();
 }
 function pageHead(kicker,title,description,actions=""){
   return '<div class="page-head"><div><div class="section-kicker">'+kicker+'</div><h1>'+title+'</h1><p>'+description+'</p></div><div class="page-actions">'+actions+'</div></div>';
@@ -47,13 +69,23 @@ function stat(label,val,foot,icon,highlight=false){
 function panel(title,sub,body,extra=""){
   return '<div class="panel"><div class="panel-header"><div><h2>'+title+'</h2>'+(sub?'<p>'+sub+'</p>':"")+'</div>'+extra+'</div>'+body+'</div>';
 }
-function table(items){
-  if(!items.length)return '<div class="empty"><div class="empty-icon">◇</div>Пока нет заявок для отображения</div>';
-  return '<div class="table-wrap"><table class="table"><thead><tr><th>ЗАЯВКА</th><th>ОБЪЕКТ / ОБОРУДОВАНИЕ</th><th>ПРИОРИТЕТ</th><th>СТАТУС</th><th>ИСПОЛНИТЕЛЬ</th><th>СРОК SLA</th></tr></thead><tbody>'+
-    items.map(t=>'<tr><td class="clickable" data-ticket="'+safe(t.id)+'"><div class="title-cell">#'+short(t.id)+'</div><div class="id-cell">'+date(t.created_at,t.timezone)+'</div></td>'+
-    '<td><div class="title-cell">'+safe(t.site)+'</div><small class="muted">'+safe(t.asset)+'</small></td><td>'+priority(t.priority)+'</td><td>'+status(t.status)+'</td>'+
-    '<td>'+safe(t.assignee||"Не назначен")+'</td><td>'+date(t.resolution_deadline,t.timezone)+'<div class="id-cell">'+safe(t.timezone)+'</div></td></tr>').join("")+'</tbody></table></div>';
+function slaDeadline(t){
+  if(["closed","cancelled"].includes(t.status))return '<span class="sla-state">Завершена</span>';
+  if(!t.resolution_deadline)return '<span class="muted">Срок не указан</span>';
+  const diff=new Date(t.resolution_deadline).getTime()-Date.now();
+  const level=diff<0?"overdue":diff<=60*60*1000?"due-soon":"";
+  const label=diff<0?"Просрочена":diff<=60*60*1000?"Срок близко":"В пределах SLA";
+  return '<span class="sla-state '+level+'">'+label+'</span>';
 }
+function table(items){
+  if(!items.length)return '<div class="empty"><div class="empty-icon">◇</div><strong>Заявки не найдены</strong><span>Попробуйте изменить фильтры или поисковый запрос.</span></div>';
+  return '<div class="table-wrap"><table class="table"><thead><tr><th scope="col">ЗАЯВКА</th><th scope="col">ОБЪЕКТ / ОБОРУДОВАНИЕ</th><th scope="col">ПРИОРИТЕТ</th><th scope="col">СТАТУС</th><th scope="col">ИСПОЛНИТЕЛЬ</th><th scope="col">СРОК SLA</th></tr></thead><tbody>'+
+    items.map(t=>'<tr><td><button type="button" class="ticket-cell" data-ticket="'+safe(t.id)+'" aria-label="Открыть заявку '+short(t.id)+'">#'+short(t.id)+'</button><div class="id-cell">'+date(t.created_at,t.timezone)+'</div></td>'+
+    '<td><div class="title-cell">'+safe(t.site)+'</div><small class="muted">'+safe(t.asset)+'</small></td><td>'+priority(t.priority)+'</td><td>'+status(t.status)+'</td>'+
+    '<td>'+safe(t.assignee||"Не назначен")+'</td><td>'+date(t.resolution_deadline,t.timezone)+
+    '<div class="sla-digest">'+slaDeadline(t)+'</div></td></tr>').join("")+'</tbody></table></div>';
+}
+
 function overview(){
   const r=state.report;const a=state.tickets;const mine=state.user.role==="engineer";const count=a.filter(t=>!["closed","cancelled"].includes(t.status)).length;
   const headline=state.user.role==="client"?"Контроль обслуживания":mine?"Мои выездные задачи":"Весь сервис на одной панели";
@@ -78,20 +110,71 @@ function overview(){
     '<button class="btn btn-primary" data-page="'+(mine?"mobile":"tickets")+'">Открыть рабочий список ↗</button></div>'+
     '<div class="layout-two">'+recent+panel("Распределение заявок","Текущая структура по статусам",activity)+'</div>';
 }
+function filteredTickets(){
+  const match=state.filter.trim().toLocaleLowerCase("ru");
+  const filtered=state.tickets.filter(t=>
+    (!match||[t.id,t.site,t.asset,t.description,t.assignee||""].some(x=>String(x||"").toLocaleLowerCase("ru").includes(match)))&&
+    (!state.ticketStatus||t.status===state.ticketStatus)&&
+    (!state.ticketPriority||t.priority===state.ticketPriority));
+  const p={P1:1,P2:2,P3:3,P4:4};
+  return filtered.sort((a,b)=>{
+    if(state.ticketSort==="priority")return (p[a.priority]||9)-(p[b.priority]||9)||new Date(a.resolution_deadline)-new Date(b.resolution_deadline);
+    if(state.ticketSort==="deadline")return new Date(a.resolution_deadline||"9999-01-01")-new Date(b.resolution_deadline||"9999-01-01");
+    return new Date(b.created_at)-new Date(a.created_at);
+  });
+}
+function ticketResults(){
+  const all=filteredTickets(),total=all.length;
+  const pages=Math.max(1,Math.ceil(total/state.ticketPageSize));
+  state.ticketPage=Math.max(1,Math.min(pages,state.ticketPage));
+  const from=(state.ticketPage-1)*state.ticketPageSize;
+  const page=all.slice(from,from+state.ticketPageSize);
+  const toolbar='<div class="table-toolbar"><div class="table-group"><span class="result-count">'+(total?from+1:0)+'–'+Math.min(total,from+state.ticketPageSize)+' из '+total+' загруженных</span>'+
+    '<span class="muted">· до 500 заявок в выдаче API</span></div><div class="toolbar-actions">'+
+    '<button type="button" class="btn btn-ghost" data-density="comfortable" aria-pressed="'+(ui.density==="comfortable")+'" title="Обычная плотность">Обычно</button>'+
+    '<button type="button" class="btn btn-ghost" data-density="compact" aria-pressed="'+(ui.density==="compact")+'" title="Компактная таблица">Плотно</button>'+
+    '<button type="button" class="btn btn-outline" data-ticket-page="'+(state.ticketPage-1)+'" '+(state.ticketPage===1?"disabled":"")+' aria-label="Предыдущая страница">‹</button>'+
+    '<span class="result-count">'+state.ticketPage+' / '+pages+'</span>'+
+    '<button type="button" class="btn btn-outline" data-ticket-page="'+(state.ticketPage+1)+'" '+(state.ticketPage===pages?"disabled":"")+' aria-label="Следующая страница">›</button></div></div>';
+  return table(page)+toolbar;
+}
+function updateTicketResults(){
+  const element=$("#ticket-table");if(!element)return;
+  element.innerHTML=ticketResults();
+  const count=$("#ticket-result-count");if(count)count.textContent=filteredTickets().length+" найдено";
+  applyAppearance();
+}
 function ticketsPage(){
-  let a=state.tickets.filter(t=>!state.filter||(t.site+" "+t.description+" "+t.id+" "+t.asset).toLowerCase().includes(state.filter.toLowerCase()));
-  return pageHead("УПРАВЛЕНИЕ ЗАЯВКАМИ","Реестр обращений","Все обращения с историей, дедлайнами и ответственными.",
-      state.user.role==="engineer"?'': '<button class="btn btn-primary" data-create-ticket>＋ Создать заявку</button>')+
-    '<div class="panel"><div class="filters"><input class="search" id="ticket-search" type="search" placeholder="Поиск по объекту, номеру, описанию" value="'+safe(state.filter)+'">'+
-    '<select id="ticket-status-filter"><option value="">Все статусы</option>'+Object.keys(STATUS).map(s=>'<option value="'+s+'">'+STATUS[s]+'</option>').join("")+'</select>'+
-    '<span class="muted">'+a.length+' обращений</span></div><div id="ticket-table">'+table(a)+'</div></div>';
+  return pageHead("УПРАВЛЕНИЕ ЗАЯВКАМИ","Реестр обращений","Поиск, актуальные сроки и действия по доступным вашей роли заявкам.",
+    state.user.role==="engineer"?"":'<button class="btn btn-primary" data-create-ticket>＋ Создать заявку</button>')+
+    '<div class="panel"><div class="filters"><input class="search" id="ticket-search" type="search" aria-label="Поиск заявок" placeholder="Номер, объект, оборудование, описание" value="'+safe(state.filter)+'">'+
+    '<select id="ticket-status-filter" aria-label="Статус заявки"><option value="">Все статусы</option>'+Object.keys(STATUS).map(s=>
+    '<option value="'+s+'" '+(s===state.ticketStatus?"selected":"")+'>'+STATUS[s]+'</option>').join("")+'</select>'+
+    '<select id="ticket-priority-filter" aria-label="Приоритет"><option value="">Все приоритеты</option>'+["P1","P2","P3","P4"].map(s=>
+    '<option value="'+s+'" '+(s===state.ticketPriority?"selected":"")+'>'+s+'</option>').join("")+'</select>'+
+    '<select id="ticket-sort" aria-label="Порядок сортировки">'+[
+    ["newest","Сначала новые"],["deadline","Ближайший SLA"],["priority","Сначала P1"]
+    ].map(([value,label])=>'<option value="'+value+'" '+(state.ticketSort===value?"selected":"")+'>'+label+'</option>').join("")+'</select>'+
+    '<span id="ticket-result-count" class="result-count">'+filteredTickets().length+' найдено</span></div>'+
+    '<div id="ticket-table">'+ticketResults()+'</div></div>';
+}
+
+function siteCards(){
+  const query=state.siteFilter.trim().toLocaleLowerCase("ru");
+  const sites=state.sites.filter(s=>!query||[s.name,s.city,s.area,s.timezone].some(x=>String(x||"").toLocaleLowerCase("ru").includes(query)));
+  return (sites.length?sites.map(s=>
+    '<article class="site-card"><div class="site-card-icon">'+glyph("sites")+'</div><h3>'+safe(s.name)+'</h3><p>'+safe(s.city)+' / '+safe(s.area)+'</p>'+
+    '<div class="site-card-foot"><span>'+safe(s.timezone)+'</span><span>Объект обслуживания</span></div></article>').join(""):
+    '<div class="empty"><div class="empty-icon">⌕</div><strong>Объекты не найдены</strong><span>Измените поисковый запрос.</span></div>');
 }
 function sitesPage(){
-  return pageHead("ОБЪЕКТЫ И ОБОРУДОВАНИЕ","Обслуживаемые объекты","Объекты, доступные вашей роли, с указанием района и часового пояса.")+
-    '<div class="site-grid">'+state.sites.slice(0,60).map(s=>
-    '<div class="site-card"><div class="site-card-icon">▧</div><h3>'+safe(s.name)+'</h3><p>'+safe(s.city)+' / '+safe(s.area)+'</p>'+
-    '<div class="site-card-foot"><span>'+safe(s.timezone)+'</span><span>Объект ↗</span></div></div>').join("")+'</div>';
+  return pageHead("ОБЪЕКТЫ И ОБОРУДОВАНИЕ","Обслуживаемые объекты","Все доступные вашей роли объекты, районы и рабочие часовые пояса.")+
+    '<div class="panel site-filters"><div class="filters">'+
+    '<input id="site-search" class="search" type="search" aria-label="Поиск объектов" value="'+safe(state.siteFilter)+'" placeholder="Найти объект, город или район">'+
+    '<span class="result-count" id="site-count">'+state.sites.length+' объектов загружено</span></div></div>'+
+    '<div class="site-grid" id="site-grid">'+siteCards()+'</div>';
 }
+
 function actsPage(){
   const a=state.acts;
   return pageHead("ДОКУМЕНТООБОРОТ","Акты и согласование","Каждое решение сохраняет предыдущие редакции документа.")+
@@ -103,7 +186,7 @@ function actsPage(){
 }
 function reportsPage(){
   const r=state.report||{total:0,open:0,breached_percent:0,repeat_percent:0,load:[]};
-  const load=r.load||[];const max=Math.max(...load.map(a=>a.count),1);
+  const load=[...(r.load||[])].sort((a,b)=>b.count-a.count).slice(0,18);const max=Math.max(...load.map(a=>a.count),1);
   const sites=[...(state.siteReport?.sites||[])].sort((a,b)=>b.breach_count-a.breach_count||b.total-a.total).slice(0,30);
   const ops=state.operations||{};
   return pageHead("СЕРВИСНАЯ АНАЛИТИКА","Качество под контролем","Реальные показатели заявок, нарушений и текущей загрузки.")+
