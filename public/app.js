@@ -2,10 +2,31 @@
 "use strict";
 const $ = (selector, scope = document) => scope.querySelector(selector);
 const $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(selector));
-const state = {user:null, page:"overview", tickets:[], sites:[], acts:[], report:null, selected:null, timeline:[], suggestions:[], filter:"", eventStream:null, localTasks:[]};
+const state = {user:null, page:"overview", tickets:[], sites:[], acts:[], report:null, selected:null, timeline:[], suggestions:[], filter:"", ticketStatus:"", ticketPriority:"", ticketSort:"newest", ticketPage:1, ticketPageSize:20, siteFilter:"", eventStream:null, localTasks:[]};
+const UI_PREFS_KEY = "FieldPulseUIPreferencesV4";
+const prefs = (() => {try{return JSON.parse(localStorage.getItem(UI_PREFS_KEY)||"{}");}catch{return {};}})();
+const ui = {theme:prefs.theme==="dark"?"dark":"light", density:prefs.density==="compact"?"compact":"comfortable"};
+function savePrefs(){try{localStorage.setItem(UI_PREFS_KEY,JSON.stringify(ui));}catch{}}
+function applyAppearance(){
+  document.documentElement.dataset.theme=ui.theme;
+  document.documentElement.classList.toggle("density-compact",ui.density==="compact");
+  document.querySelectorAll("[data-theme]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.theme===ui.theme)));
+  document.querySelectorAll("[data-density]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.density===ui.density)));
+}
+const ICON_PATH = {
+ overview:'<rect x="3" y="3" width="7" height="9" rx="1.4"/><rect x="14" y="3" width="7" height="5" rx="1.4"/><rect x="14" y="12" width="7" height="9" rx="1.4"/><rect x="3" y="16" width="7" height="5" rx="1.4"/>',
+ tickets:'<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01" stroke-width="3" stroke-linecap="round"/>',
+ sites:'<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 7h2m2 0h2M9 11h2m2 0h2M9 15h6m-5 6v-4h4v4"/>',
+ mobile:'<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+ acts:'<path d="M7 3h8l4 4v14H5V3h2"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+ reports:'<path d="M4 20V11m6 9V5m6 15v-9m4 9V8"/><path d="M2 20h20"/>',
+ inbox:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h5l2 3h4l2-3h5"/>',
+ admin:'<circle cx="12" cy="12" r="3"/><path d="m19 13 2-1-2-1-.5-2 1-2-2-2-2 1-2-.5-1-2-1 2-2 .5-2-1-2 2 1 2-.5 2-2 1 2 1 .5 2-1 2 2 2 2-1 2 .5 1 2 1-2 2-.5 2 1 2-2-1-2z"/>'
+};
+const glyph = name => '<svg class="nav-glyph" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'+ICON_PATH[name]+'</svg>';
+
 const ROLE = {admin:"Администратор",manager:"Руководитель",dispatcher:"Диспетчер",engineer:"Инженер",client:"Клиент"};
 const STATUS = {new:"Новая",triage:"Триаж",assigned:"Назначена",accepted:"Принята",in_progress:"В работе",approval:"Согласование",returned:"Возврат",closed:"Закрыта",cancelled:"Отменена"};
-const ICON = {overview:"◈",tickets:"▤",sites:"▦",mobile:"⬡",acts:"▣",reports:"◫",inbox:"◉",admin:"⚙"};
 const TITLE = {overview:"Обзор",tickets:"Заявки",sites:"Объекты",mobile:"Мобильное рабочее место",acts:"Акты выполненных работ",reports:"Аналитика",inbox:"Уведомления",admin:"Администрирование"};
 const CHECKS = {electrical:["isolation","voltage","result"],hvac:["filter","pressure","result"],low_voltage:["connection","signal","result"]};
 const CHECK_LABEL = {isolation:"Безопасное отключение",voltage:"Проверка напряжения",result:"Проверка результата",filter:"Состояние фильтра",pressure:"Давление системы",connection:"Подключение",signal:"Проверка сигнала",inspection:"Осмотр"};
@@ -13,7 +34,7 @@ const safe = value => String(value == null ? "" : value).replace(/[&<>"']/g, c =
 const short = id => safe(String(id || "").slice(0,8).toUpperCase());
 const date = (v,zone) => {if(!v) return "—";try{return new Intl.DateTimeFormat("ru-RU",{dateStyle:"short",timeStyle:"short",timeZone:zone||"Europe/Moscow"}).format(new Date(v));}catch{return "—";}};
 const status = s => '<span class="status '+safe(s)+'">'+safe(STATUS[s]||s)+'</span>';
-const priority = p => '<span class="priority '+safe((p||"").toLowerCase())+'">● '+safe(p)+'</span>';
+const priority = p => '<span class="priority '+safe((p||"").toLowerCase())+'">'+safe(p)+'</span>';
 const toast = (message,error=false) => {const el=$("#toast");el.textContent=message;el.className="toast visible"+(error?" error":"");clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>el.classList.remove("visible"),4200);};
 const csrf = () => {const entry=document.cookie.split("; ").find(x=>x.startsWith("fp_csrf="));return entry?decodeURIComponent(entry.slice(8)):"";};
 async function api(path, options={}){
@@ -35,8 +56,9 @@ function setIdentity(){
   $("#user-name").textContent=state.user.name;$("#user-role").textContent=ROLE[state.user.role]||state.user.role;
   $("#user-avatar").textContent=state.user.name.split(" ").map(v=>v[0]).slice(0,2).join("").toUpperCase();
   $("#today-label").textContent=new Intl.DateTimeFormat("ru-RU",{day:"numeric",month:"long",year:"numeric"}).format(new Date());
-  $("#navigation").innerHTML=navItems().map(p=>'<button class="nav-item '+(p===state.page?"active":"")+'" data-page="'+p+'"><span class="nav-icon">'+ICON[p]+'</span>'+TITLE[p]+'</button>').join("");
+  $("#navigation").innerHTML=navItems().map(p=>'<button type="button" class="nav-item '+(p===state.page?"active":"")+'" data-page="'+p+'" '+(p===state.page?'aria-current="page"':"")+'><span class="nav-icon">'+glyph(p)+'</span>'+TITLE[p]+'</button>').join("");
   $("#breadcrumb-current").textContent=TITLE[state.page];
+  applyAppearance();
 }
 function pageHead(kicker,title,description,actions=""){
   return '<div class="page-head"><div><div class="section-kicker">'+kicker+'</div><h1>'+title+'</h1><p>'+description+'</p></div><div class="page-actions">'+actions+'</div></div>';
@@ -47,63 +69,153 @@ function stat(label,val,foot,icon,highlight=false){
 function panel(title,sub,body,extra=""){
   return '<div class="panel"><div class="panel-header"><div><h2>'+title+'</h2>'+(sub?'<p>'+sub+'</p>':"")+'</div>'+extra+'</div>'+body+'</div>';
 }
-function table(items){
-  if(!items.length)return '<div class="empty"><div class="empty-icon">◇</div>Пока нет заявок для отображения</div>';
-  return '<div class="table-wrap"><table class="table"><thead><tr><th>ЗАЯВКА</th><th>ОБЪЕКТ / ОБОРУДОВАНИЕ</th><th>ПРИОРИТЕТ</th><th>СТАТУС</th><th>ИСПОЛНИТЕЛЬ</th><th>СРОК SLA</th></tr></thead><tbody>'+
-    items.map(t=>'<tr><td class="clickable" data-ticket="'+safe(t.id)+'"><div class="title-cell">#'+short(t.id)+'</div><div class="id-cell">'+date(t.created_at,t.timezone)+'</div></td>'+
-    '<td><div class="title-cell">'+safe(t.site)+'</div><small class="muted">'+safe(t.asset)+'</small></td><td>'+priority(t.priority)+'</td><td>'+status(t.status)+'</td>'+
-    '<td>'+safe(t.assignee||"Не назначен")+'</td><td>'+date(t.resolution_deadline,t.timezone)+'<div class="id-cell">'+safe(t.timezone)+'</div></td></tr>').join("")+'</tbody></table></div>';
+function slaDeadline(t){
+  if(["closed","cancelled"].includes(t.status))return '<span class="sla-state">Завершена</span>';
+  if(!t.resolution_deadline)return '<span class="muted">Срок не указан</span>';
+  const diff=new Date(t.resolution_deadline).getTime()-Date.now();
+  const level=diff<0?"overdue":diff<=60*60*1000?"due-soon":"";
+  const label=diff<0?"Просрочена":diff<=60*60*1000?"Срок близко":"В пределах SLA";
+  return '<span class="sla-state '+level+'">'+label+'</span>';
 }
+function table(items){
+  if(!items.length)return '<div class="empty"><div class="empty-icon">◇</div><strong>Заявки не найдены</strong><span>Попробуйте изменить фильтры или поисковый запрос.</span></div>';
+  return '<div class="table-wrap"><table class="table"><thead><tr><th scope="col">ЗАЯВКА</th><th scope="col">ОБЪЕКТ / ОБОРУДОВАНИЕ</th><th scope="col">ПРИОРИТЕТ</th><th scope="col">СТАТУС</th><th scope="col">ИСПОЛНИТЕЛЬ</th><th scope="col">СРОК SLA</th></tr></thead><tbody>'+
+    items.map(t=>'<tr><td><button type="button" class="ticket-cell" data-ticket="'+safe(t.id)+'" aria-label="Открыть заявку '+short(t.id)+'">#'+short(t.id)+'</button><div class="id-cell">'+date(t.created_at,t.timezone)+'</div></td>'+
+    '<td><div class="title-cell">'+safe(t.site)+'</div><small class="muted">'+safe(t.asset)+'</small></td><td>'+priority(t.priority)+'</td><td>'+status(t.status)+'</td>'+
+    '<td>'+safe(t.assignee||"Не назначен")+'</td><td>'+date(t.resolution_deadline,t.timezone)+
+    '<div class="sla-digest">'+slaDeadline(t)+'</div></td></tr>').join("")+'</tbody></table></div>';
+}
+
 function overview(){
-  const r=state.report;const a=state.tickets;const mine=state.user.role==="engineer";const count=a.filter(t=>!["closed","cancelled"].includes(t.status)).length;
-  const headline=state.user.role==="client"?"Контроль обслуживания":mine?"Мои выездные задачи":"Весь сервис на одной панели";
-  const greeting=pageHead("ОПЕРАЦИОННЫЙ ОБЗОР",headline,"Актуальные заявки, сроки и рабочие процессы в режиме реального времени.",
-      state.user.role==="engineer"?'<button class="btn btn-primary" data-page="mobile">↗ Перейти к задачам</button>':
-      '<button class="btn btn-primary" data-create-ticket>＋ Новая заявка</button>');
-  const cards='<div class="stats">'+stat("Всего заявок",r?r.total:a.length,"Зарегистрировано в системе","▣")+
-    stat("В работе",r?r.open:count,"Требуют внимания","◷")+
-    stat("Закрыто",r?r.closed:a.filter(x=>x.status==="closed").length,"Завершённые обращения","✓")+
-    stat(r?"Нарушения SLA":"Ожидают назначения",r?r.breached_percent+"%":a.filter(x=>!x.assignee_id).length,
-         r?"Процент заявок с нарушением":"Не распределены по исполнителям","↗",true)+'</div>';
-  const recent=panel("Последние обращения","Недавние изменения в заявках",table(a.slice(0,7)),
-                   '<button class="btn btn-outline" data-page="tickets">Все заявки ↗</button>');
-  const statuses=Object.keys(STATUS).filter(x=>["new","triage","assigned","accepted","in_progress","approval","closed"].includes(x));
-  const total=Math.max(1,a.length);
-  const activity='<div class="panel-body"><div class="activity">'+statuses.map(k=>{
-    const n=a.filter(x=>x.status===k).length;
-    return '<div class="activity-item"><span class="activity-dot">◦</span><div style="flex:1"><b>'+STATUS[k]+' <span style="float:right">'+n+'</span></b>'+
-      '<div class="progress-meter"><span style="width:'+Math.round(n/total*100)+'%"></span></div></div></div>';
-  }).join("")+'</div></div>';
-  return greeting+cards+'<div class="intro-banner"><div><h2>Работа без остановок</h2><p>Проверяйте историю, версии документов и рабочие сроки для каждой заявки.</p></div>'+
+  const r=state.report;
+  const all=state.tickets;
+  const mine=state.user.role==="engineer";
+  const active=all.filter(t=>!["closed","cancelled"].includes(t.status));
+  const headline=state.user.role==="client"?"Контроль обслуживания":mine?"Мои выездные задачи":"Сервис под контролем";
+  const header=pageHead("ОПЕРАЦИОННЫЙ ОБЗОР",headline,"Актуальные обращения, исполнители и сроки на одном экране.",
+    mine?'<button class="btn btn-primary" data-page="mobile">↗ Перейти к заданиям</button>':
+    '<button class="btn btn-primary" data-create-ticket>＋ Создать заявку</button>');
+  const summary='<div class="stats">'+
+    stat("Всего заявок",r?r.total:all.length,"В доступном вам реестре","▣")+
+    stat("Открытые",r?r.open:active.length,"Требуют выполнения","◷")+
+    stat("Закрыто",r?r.closed:all.filter(t=>t.status==="closed").length,"Работы завершены","✓")+
+    stat(r?"Нарушения SLA":"Не назначены",r?r.breached_percent+"%":active.filter(t=>!t.assignee_id).length,
+      r?"Доля заявок с нарушением":"Ожидают исполнителя","↗",true)+'</div>';
+  const upcoming=active.filter(t=>t.resolution_deadline).sort((a,b)=>new Date(a.resolution_deadline)-new Date(b.resolution_deadline)).slice(0,6);
+  const watchlist=panel("Под контролем","Ближайшие сроки из доступных загруженных заявок",
+    '<div class="watchlist">'+(upcoming.length?upcoming.map(t=>
+    '<button type="button" class="watchlist-row" data-ticket="'+safe(t.id)+'"><span class="watchlist-head"><b>#'+short(t.id)+'</b>'+
+    priority(t.priority)+'</span><span class="watchlist-description">'+safe(t.site)+' · '+safe(t.asset)+'</span>'+
+    '<span class="watchlist-date">'+date(t.resolution_deadline,t.timezone)+' · '+slaDeadline(t)+'</span></button>').join(""):
+    '<div class="empty">Нет активных заявок со сроком SLA.</div>')+'</div>');
+  const recent=panel("Последние обращения","Последние изменения в доступном реестре",table(all.slice(0,7)),
+    '<button class="btn btn-outline" data-page="tickets">Весь реестр ↗</button>');
+  const steps=["new","triage","assigned","accepted","in_progress","approval","closed"];
+  const total=Math.max(1,all.length);
+  const distribution=panel("Этапы обслуживания","Распределение загруженных заявок по статусам",
+    '<div class="panel-body"><div class="activity">'+steps.map(key=>{
+      const count=all.filter(t=>t.status===key).length;
+      return '<div class="activity-item"><span class="activity-dot">◦</span><div><b>'+STATUS[key]+'<span class="activity-total">'+count+'</span></b>'+
+      '<div class="progress-meter" role="progressbar" aria-label="'+STATUS[key]+'" aria-valuemin="0" aria-valuemax="'+all.length+'" aria-valuenow="'+count+'"><span style="width:'+Math.round(count/total*100)+'%"></span></div></div></div>';
+    }).join("")+'</div></div>');
+  return header+summary+
+    '<div class="intro-banner"><div><span class="eyebrow">FIELD OPERATIONS / V0.4</span><h2>Вся работа — в едином потоке</h2>'+
+    '<p>Следите за изменениями заявок, документами, назначениями и SLA без переключения между системами.</p></div>'+
     '<button class="btn btn-primary" data-page="'+(mine?"mobile":"tickets")+'">Открыть рабочий список ↗</button></div>'+
-    '<div class="layout-two">'+recent+panel("Распределение заявок","Текущая структура по статусам",activity)+'</div>';
+    '<div class="layout-two">'+recent+watchlist+'</div>'+distribution;
+}
+
+function filteredTickets(){
+  const match=state.filter.trim().toLocaleLowerCase("ru");
+  const filtered=state.tickets.filter(t=>
+    (!match||[t.id,t.site,t.asset,t.description,t.assignee||""].some(x=>String(x||"").toLocaleLowerCase("ru").includes(match)))&&
+    (!state.ticketStatus||t.status===state.ticketStatus)&&
+    (!state.ticketPriority||t.priority===state.ticketPriority));
+  const p={P1:1,P2:2,P3:3,P4:4};
+  return filtered.sort((a,b)=>{
+    if(state.ticketSort==="priority")return (p[a.priority]||9)-(p[b.priority]||9)||new Date(a.resolution_deadline)-new Date(b.resolution_deadline);
+    if(state.ticketSort==="deadline")return new Date(a.resolution_deadline||"9999-01-01")-new Date(b.resolution_deadline||"9999-01-01");
+    return new Date(b.created_at)-new Date(a.created_at);
+  });
+}
+function ticketResults(){
+  const all=filteredTickets(),total=all.length;
+  const pages=Math.max(1,Math.ceil(total/state.ticketPageSize));
+  state.ticketPage=Math.max(1,Math.min(pages,state.ticketPage));
+  const from=(state.ticketPage-1)*state.ticketPageSize;
+  const page=all.slice(from,from+state.ticketPageSize);
+  const toolbar='<div class="table-toolbar"><div class="table-group"><span class="result-count">'+(total?from+1:0)+'–'+Math.min(total,from+state.ticketPageSize)+' из '+total+' загруженных</span>'+
+    '<span class="muted">· до 500 заявок в выдаче API</span></div><div class="toolbar-actions">'+
+    '<button type="button" class="btn btn-ghost" data-density="comfortable" aria-pressed="'+(ui.density==="comfortable")+'" title="Обычная плотность">Обычно</button>'+
+    '<button type="button" class="btn btn-ghost" data-density="compact" aria-pressed="'+(ui.density==="compact")+'" title="Компактная таблица">Плотно</button>'+
+    '<button type="button" class="btn btn-outline" data-ticket-page="'+(state.ticketPage-1)+'" '+(state.ticketPage===1?"disabled":"")+' aria-label="Предыдущая страница">‹</button>'+
+    '<span class="result-count">'+state.ticketPage+' / '+pages+'</span>'+
+    '<button type="button" class="btn btn-outline" data-ticket-page="'+(state.ticketPage+1)+'" '+(state.ticketPage===pages?"disabled":"")+' aria-label="Следующая страница">›</button></div></div>';
+  return table(page)+toolbar;
+}
+function updateTicketResults(){
+  const element=$("#ticket-table");if(!element)return;
+  element.innerHTML=ticketResults();
+  const count=$("#ticket-result-count");if(count)count.textContent=filteredTickets().length+" найдено";
+  applyAppearance();
 }
 function ticketsPage(){
-  let a=state.tickets.filter(t=>!state.filter||(t.site+" "+t.description+" "+t.id+" "+t.asset).toLowerCase().includes(state.filter.toLowerCase()));
-  return pageHead("УПРАВЛЕНИЕ ЗАЯВКАМИ","Реестр обращений","Все обращения с историей, дедлайнами и ответственными.",
-      state.user.role==="engineer"?'': '<button class="btn btn-primary" data-create-ticket>＋ Создать заявку</button>')+
-    '<div class="panel"><div class="filters"><input class="search" id="ticket-search" type="search" placeholder="Поиск по объекту, номеру, описанию" value="'+safe(state.filter)+'">'+
-    '<select id="ticket-status-filter"><option value="">Все статусы</option>'+Object.keys(STATUS).map(s=>'<option value="'+s+'">'+STATUS[s]+'</option>').join("")+'</select>'+
-    '<span class="muted">'+a.length+' обращений</span></div><div id="ticket-table">'+table(a)+'</div></div>';
+  return pageHead("УПРАВЛЕНИЕ ЗАЯВКАМИ","Реестр обращений","Поиск, актуальные сроки и действия по доступным вашей роли заявкам.",
+    state.user.role==="engineer"?"":'<button class="btn btn-primary" data-create-ticket>＋ Создать заявку</button>')+
+    '<div class="panel"><div class="filters"><input class="search" id="ticket-search" type="search" aria-label="Поиск заявок" placeholder="Номер, объект, оборудование, описание" value="'+safe(state.filter)+'">'+
+    '<select id="ticket-status-filter" aria-label="Статус заявки"><option value="">Все статусы</option>'+Object.keys(STATUS).map(s=>
+    '<option value="'+s+'" '+(s===state.ticketStatus?"selected":"")+'>'+STATUS[s]+'</option>').join("")+'</select>'+
+    '<select id="ticket-priority-filter" aria-label="Приоритет"><option value="">Все приоритеты</option>'+["P1","P2","P3","P4"].map(s=>
+    '<option value="'+s+'" '+(s===state.ticketPriority?"selected":"")+'>'+s+'</option>').join("")+'</select>'+
+    '<select id="ticket-sort" aria-label="Порядок сортировки">'+[
+    ["newest","Сначала новые"],["deadline","Ближайший SLA"],["priority","Сначала P1"]
+    ].map(([value,label])=>'<option value="'+value+'" '+(state.ticketSort===value?"selected":"")+'>'+label+'</option>').join("")+'</select>'+
+    '<span id="ticket-result-count" class="result-count">'+filteredTickets().length+' найдено</span></div>'+
+    '<div id="ticket-table">'+ticketResults()+'</div></div>';
+}
+
+function siteCards(){
+  const query=state.siteFilter.trim().toLocaleLowerCase("ru");
+  const sites=state.sites.filter(s=>!query||[s.name,s.city,s.area,s.timezone].some(x=>String(x||"").toLocaleLowerCase("ru").includes(query)));
+  return (sites.length?sites.map(s=>
+    '<article class="site-card"><div class="site-card-icon">'+glyph("sites")+'</div><h3>'+safe(s.name)+'</h3><p>'+safe(s.city)+' / '+safe(s.area)+'</p>'+
+    '<div class="site-card-foot"><span>'+safe(s.timezone)+'</span><span>Объект обслуживания</span></div></article>').join(""):
+    '<div class="empty"><div class="empty-icon">⌕</div><strong>Объекты не найдены</strong><span>Измените поисковый запрос.</span></div>');
 }
 function sitesPage(){
-  return pageHead("ОБЪЕКТЫ И ОБОРУДОВАНИЕ","Обслуживаемые объекты","Объекты, доступные вашей роли, с указанием района и часового пояса.")+
-    '<div class="site-grid">'+state.sites.slice(0,60).map(s=>
-    '<div class="site-card"><div class="site-card-icon">▧</div><h3>'+safe(s.name)+'</h3><p>'+safe(s.city)+' / '+safe(s.area)+'</p>'+
-    '<div class="site-card-foot"><span>'+safe(s.timezone)+'</span><span>Объект ↗</span></div></div>').join("")+'</div>';
+  return pageHead("ОБЪЕКТЫ И ОБОРУДОВАНИЕ","Обслуживаемые объекты","Все доступные вашей роли объекты, районы и рабочие часовые пояса.")+
+    '<div class="panel site-filters"><div class="filters">'+
+    '<input id="site-search" class="search" type="search" aria-label="Поиск объектов" value="'+safe(state.siteFilter)+'" placeholder="Найти объект, город или район">'+
+    '<span class="result-count" id="site-count">'+state.sites.length+' объектов загружено</span></div></div>'+
+    '<div class="site-grid" id="site-grid">'+siteCards()+'</div>';
 }
+
 function actsPage(){
-  const a=state.acts;
-  return pageHead("ДОКУМЕНТООБОРОТ","Акты и согласование","Каждое решение сохраняет предыдущие редакции документа.")+
-    panel("История актов",a.length+" редакций",
-    a.length?'<div class="table-wrap"><table class="table"><thead><tr><th>АКТ</th><th>ЗАЯВКА</th><th>РЕДАКЦИЯ</th><th>СТАТУС</th><th>ДАТА</th><th>ДЕЙСТВИЕ</th></tr></thead><tbody>'+
-    a.map(x=>'<tr><td class="title-cell">#'+short(x.id)+'</td><td class="clickable" data-ticket="'+safe(x.ticket_id)+'">#'+short(x.ticket_id)+'</td><td>v'+x.version+'</td><td>'+status(x.status)+'</td><td>'+date(x.created_at)+'</td>'+
-    '<td><button class="btn btn-outline" data-act="'+safe(x.id)+'">Просмотр ↗</button></td></tr>').join("")+'</tbody></table></div>':
-    '<div class="empty">Акты появятся здесь после выполнения работ.</div>');
+  const records=state.acts;
+  const pending=records.filter(x=>x.status==="pending");
+  const accepted=records.filter(x=>x.status==="accepted");
+  const rejected=records.filter(x=>x.status==="rejected");
+  const drafts=records.filter(x=>x.status==="draft");
+  const summary='<div class="stats">'+
+    stat("Всего редакций",records.length,"Доступные вашей роли акты","▣")+
+    stat("На согласовании",pending.length,"Ожидают решения","◷",true)+
+    stat("Принято",accepted.length,"Подтверждённые акты","✓")+
+    stat("Возвращено",rejected.length,"Для повторной доработки","↶")+'</div>';
+  const note='<div class="intro-banner"><div><h2>Каждое решение имеет историю</h2>'+
+    '<p>Возврат создаёт новую редакцию акта. Доступ к документам разграничен по ролям и организациям.</p></div>'+
+    '<span class="mobile-state">'+drafts.length+' черновиков</span></div>';
+  const listing=records.length?'<div class="table-wrap"><table class="table"><thead><tr><th>АКТ</th><th>ЗАЯВКА</th><th>РЕДАКЦИЯ</th><th>СТАТУС</th><th>ДАТА</th><th>ДЕЙСТВИЕ</th></tr></thead><tbody>'+
+    records.map(x=>'<tr><td class="title-cell">#'+short(x.id)+'</td><td><button class="ticket-cell" data-ticket="'+safe(x.ticket_id)+'">#'+short(x.ticket_id)+'</button></td>'+
+    '<td>v'+x.version+'</td><td>'+status(x.status)+'</td><td>'+date(x.created_at)+'</td>'+
+    '<td><button class="btn btn-outline" data-act="'+safe(x.id)+'">Открыть акт ↗</button></td></tr>').join("")+'</tbody></table></div>':
+    '<div class="empty"><div class="empty-icon">▣</div><strong>Акты пока не созданы</strong><span>После выполнения работ они появятся здесь.</span></div>';
+  return pageHead("ДОКУМЕНТООБОРОТ","Акты и согласование","Редакции, результаты работ и история согласования.")+
+    summary+note+panel("Журнал актов",records.length+" доступных редакций",listing);
 }
+
 function reportsPage(){
   const r=state.report||{total:0,open:0,breached_percent:0,repeat_percent:0,load:[]};
-  const load=r.load||[];const max=Math.max(...load.map(a=>a.count),1);
+  const load=[...(r.load||[])].sort((a,b)=>b.count-a.count).slice(0,18);const max=Math.max(...load.map(a=>a.count),1);
   const sites=[...(state.siteReport?.sites||[])].sort((a,b)=>b.breach_count-a.breach_count||b.total-a.total).slice(0,30);
   const ops=state.operations||{};
   return pageHead("СЕРВИСНАЯ АНАЛИТИКА","Качество под контролем","Реальные показатели заявок, нарушений и текущей загрузки.")+
@@ -132,12 +244,22 @@ function inboxPage(){
       notifications.map(n=>'<div class="activity-item"><span class="activity-dot">◉</span><div><b>'+safe(n.subject)+'</b><small>'+date(n.at)+' / '+safe(n.recipient)+'</small><p style="font-size:11px">'+safe(n.body)+'</p></div></div>').join(""):
       '<div class="empty">Новые уведомления появятся по мере приближения SLA.</div>')+'</div></div>');
 }
+let previousModalFocus=null;
 function modal(title,body,foot="",small=false){
-  $("#modal-root").innerHTML='<div class="modal-overlay" id="overlay"><section class="modal '+(small?"sm":"")+'" role="dialog" aria-modal="true" aria-label="'+safe(title)+'">'+
-  '<header class="modal-head"><div><div class="section-kicker">FIELD PULSE / WORKSPACE</div><h2>'+safe(title)+'</h2></div><button class="modal-close" data-close>×</button></header>'+
+  if(!$("#modal-root").querySelector(".modal"))previousModalFocus=document.activeElement;
+  $("#modal-root").innerHTML='<div class="modal-overlay" id="overlay"><section class="modal '+(small?"sm":"")+'" role="dialog" aria-modal="true" aria-labelledby="modal-title">'+
+  '<header class="modal-head"><div><div class="section-kicker">FIELD PULSE / WORKSPACE</div><h2 id="modal-title">'+safe(title)+'</h2></div><button type="button" class="modal-close" data-close aria-label="Закрыть окно">×</button></header>'+
   '<div class="modal-content">'+body+'</div>'+(foot?'<div class="modal-foot">'+foot+'</div>':"")+'</section></div>';
+  document.body.classList.add("modal-open");
+  $("#modal-root .modal-close").focus();
 }
-function closeModal(){$("#modal-root").innerHTML="";}
+function closeModal(){
+  const wasOpen=Boolean($("#modal-root .modal"));
+  $("#modal-root").innerHTML="";
+  document.body.classList.remove("modal-open");
+  if(wasOpen&&previousModalFocus?.isConnected)previousModalFocus.focus();
+  previousModalFocus=null;
+}
 async function createTicketModal(){
   if(!state.sites.length)state.sites=await api("/sites");
   if(!state.sites.length)return toast("Нет доступных объектов",true);
@@ -159,36 +281,71 @@ async function loadAssets(){
   catch(err){toast(err.message,true);}
 }
 async function details(id){
-  const t=await api("/tickets/"+id);state.selected=t;
-  const timeline=await api("/tickets/"+id+"/timeline");state.timeline=timeline;
+  const t=await api("/tickets/"+encodeURIComponent(id));state.selected=t;
+  const [history,photos,logs,checklist]=await Promise.all([
+    api("/tickets/"+encodeURIComponent(id)+"/timeline"),
+    api("/tickets/"+encodeURIComponent(id)+"/attachments"),
+    api("/tickets/"+encodeURIComponent(id)+"/worklogs"),
+    api("/tickets/"+encodeURIComponent(id)+"/checklist"),
+  ]);
+  state.timeline=history;
   const canStaff=["admin","dispatcher","manager"].includes(state.user.role);
   const isEngineer=state.user.role==="engineer";
-  let buttons=[];
-  function action(label,key,style="btn-outline"){buttons.push('<button class="btn '+style+'" data-task-action="'+key+'">'+label+'</button>');}
+  const actions=[];
+  function action(label,key,style="btn-outline"){actions.push('<button type="button" class="btn '+style+'" data-task-action="'+key+'">'+label+'</button>');}
   if(canStaff&&t.status==="new")action("Взять в триаж","triage");
   if(canStaff&&["new","triage","returned"].includes(t.status))action("Назначить инженера","assign","btn-primary");
-  if(canStaff)action("Сверка SLA","reconcile");
+  if(canStaff)action("Сверить SLA","reconcile");
   if(isEngineer&&t.status==="assigned")action("Принять заявку","accept","btn-primary");
   if(isEngineer&&["accepted","returned"].includes(t.status))action("Начать работы","start","btn-primary");
   if(canStaff&&["assigned","accepted","in_progress"].includes(t.status))action("Пауза SLA","pause");
   if(canStaff&&["assigned","accepted","in_progress"].includes(t.status))action("Возобновить SLA","resume");
   if(canStaff&&["new","triage","assigned","accepted","in_progress","returned"].includes(t.status))action("Отменить","cancel","btn-red");
   if(isEngineer&&t.status==="in_progress")action("Оформить акт","submit","btn-primary");
-  const desc='<div>'+priority(t.priority)+' '+status(t.status)+' <span class="muted">Версия '+t.version+'</span></div>'+
-    '<h3 style="font-size:17px;margin:17px 0 5px">'+safe(t.description)+'</h3><p class="muted">'+safe(t.site)+' / '+safe(t.asset)+'</p>'+
+  const gallery=photos.length?
+    '<div class="photo-grid">'+photos.map(p=>
+      '<a class="photo-frame" target="_blank" rel="noopener noreferrer" href="/api/v1/attachments/'+encodeURIComponent(p.id)+'" aria-label="Открыть фото '+short(p.id)+'">'+
+      '<img loading="lazy" alt="Фотография заявки '+short(t.id)+'" src="/api/v1/attachments/'+encodeURIComponent(p.id)+'?thumb=true">'+
+      '<span>Фото '+short(p.id)+' · '+Math.round(p.size/1024)+' КиБ</span></a>').join("")+'</div>':
+    '<div class="empty empty-compact">Фотографии пока не добавлены.</div>';
+  const completedChecks=Object.create(null);
+  for(const record of logs)for(const [key,value] of Object.entries(record.checklist||{}))
+    if(value===true)completedChecks[key]=true;
+  const requiredChecks=checklist.required||[];
+  const checksDone=requiredChecks.filter(key=>completedChecks[key]===true).length;
+  const checklistView='<div class="checklist-progress" aria-label="Проверок выполнено '+checksDone+' из '+requiredChecks.length+'"><strong>'+
+    checksDone+' / '+requiredChecks.length+'</strong><span>проверок подтверждено</span></div>'+
+    '<div class="detail-checklist">'+requiredChecks.map(key=>
+      '<div class="check-row"><span class="check-mark '+(completedChecks[key]===true?"done":"")+'">'+
+      (completedChecks[key]===true?"✓":"○")+'</span><span>'+safe(CHECK_LABEL[key]||key)+'</span></div>').join("")+'</div>';
+  const chronology=history.length?history.map(e=>
+    '<div class="timeline-entry"><b>'+safe(e.type.replaceAll("_"," "))+'</b><small>'+date(e.at,t.timezone)+'</small>'+
+    (e.data&&(e.data.text||e.data.reason)?'<p>'+safe(e.data.text||e.data.reason)+'</p>':"")+'</div>').join(""):
+    '<div class="muted">Событий пока нет.</div>';
+  const work=logs.length?logs.map(w=>
+    '<div class="worklog-entry"><strong>'+safe(w.summary||"Запись о выполненных работах")+'</strong><small>'+date(w.server_at,t.timezone)+
+    ' · '+(w.materials||[]).length+' материалов</small></div>').join(""):
+    '<p class="muted">Записей о выполненных работах ещё нет.</p>';
+  const body='<div class="detail-summary"><div class="sla-digest">'+priority(t.priority)+status(t.status)+
+    '<span class="muted">Редакция '+t.version+'</span></div>'+
+    '<h3>'+safe(t.description)+'</h3><p>'+safe(t.site)+' · '+safe(t.asset)+'</p>'+
+    '<div class="sla-digest">'+slaDeadline(t)+' <small>· Политика '+safe(t.sla.policy_name)+'</small></div></div>'+
     '<div class="detail-meta"><div><small>Создана</small><strong>'+date(t.created_at,t.timezone)+'</strong></div>'+
     '<div><small>Реакция до</small><strong>'+date(t.reaction_deadline,t.timezone)+'</strong></div>'+
     '<div><small>Решение до</small><strong>'+date(t.resolution_deadline,t.timezone)+'</strong></div></div>'+
-    '<p class="muted" style="font-size:10px">Часовой пояс объекта: '+safe(t.timezone)+' · Политика '+safe(t.sla.policy_name)+'</p>'+
-    '<div class="detail-buttons">'+buttons.join("")+'</div><h3 class="subheading">ХРОНОЛОГИЯ СОБЫТИЙ</h3>'+
-    '<div class="timeline">'+timeline.map(e=>'<div class="timeline-entry"><b>'+safe(e.type.replaceAll("_"," "))+'</b>'+
-      '<small>'+date(e.at,t.timezone)+'</small>'+(e.data && (e.data.text||e.data.reason)?
-      '<p>'+safe(e.data.text||e.data.reason)+'</p>':"")+'</div>').join("")+'</div>'+
-    '<div class="field" style="margin-top:16px"><label>Комментарий<textarea id="new-comment" rows="2" maxlength="2000" placeholder="Оставить запись в истории"></textarea></label>'+
-    (state.user.role!=="client"?'<label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="comment-internal"> Внутренний комментарий</label>':"")+
-    '<button class="btn btn-outline" data-comment>Добавить комментарий</button></div>';
-  modal("Заявка #"+short(t.id),desc);
+    '<p class="muted" style="font-size:11px">Часовой пояс: '+safe(t.timezone)+' · Исполнитель: '+safe(t.assignee||"Не назначен")+'</p>'+
+    '<div class="detail-buttons">'+actions.join("")+'</div>'+
+    '<div class="detail-subgrid"><section><h3 class="subheading">Хронология событий <span>'+history.length+'</span></h3>'+
+    '<div class="timeline">'+chronology+'</div></section>'+
+    '<section><h3 class="subheading">Фотографии <span>'+photos.length+'</span></h3>'+gallery+
+    '<h3 class="subheading">Проверки <span>'+checksDone+'/'+requiredChecks.length+'</span></h3>'+checklistView+
+    '<h3 class="subheading">Выполненные работы <span>'+logs.length+'</span></h3>'+work+'</section></div>'+
+    '<div class="detail-comment field"><label>Комментарий<textarea id="new-comment" rows="2" maxlength="2000" placeholder="Добавить запись в историю"></textarea></label>'+
+    (state.user.role!=="client"?'<label class="checklist-row"><input type="checkbox" id="comment-internal"> Внутренний комментарий</label>':"")+
+    '<button type="button" class="btn btn-outline" data-comment>Добавить комментарий</button></div>';
+  modal("Заявка #"+short(t.id),body);
 }
+
 async function assignment(){
   const t=state.selected;const candidates=await api("/engineers/suggestions?ticket_id="+t.id);
   state.suggestions=candidates;
@@ -218,29 +375,40 @@ async function actModal(id){
   modal("Акт #"+short(id),body,foot);
 }
 function offlineNotice(){
-  return '<div class="intro-banner"><div><h2>Мобильная работа без сети</h2><p>Задачи сохраняются в устройстве. Черновики отправляются только после подтверждения сервера.</p></div>'+
-  '<button class="btn btn-primary" data-sync>↻ Синхронизировать</button></div>';
+  const offline=!navigator.onLine;
+  return '<div class="intro-banner mobile-banner"><div><span class="mobile-state '+(offline?"offline":"")+'">'+
+  (offline?"● Нет соединения":"● Соединение активно")+'</span>'+
+  '<h2>Мобильная работа без остановок</h2><p>Карточки и черновики сохраняются на устройстве. Сервер подтверждает каждую отправку.</p>'+
+  '<p class="last-sync">Последняя загрузка заданий: '+safe(state.lastCached?date(state.lastCached):"ещё не выполнялась")+'</p></div>'+
+  '<button type="button" class="btn btn-primary" data-sync>↻ Синхронизировать</button></div>';
 }
 async function mobilePage(){
   const local=await dbAll("tasks");state.localTasks=local;
-  let pending=await dbAll("queue");state.queue=pending;
-  const items=local.filter(x=>x.assignee_id===state.user.id && ["assigned","accepted","in_progress","returned"].includes(x.status));
-  let out=pageHead("ПОЛЕВОЙ МОДУЛЬ","Рабочее место инженера","Заявки и чек-листы доступны после загрузки даже без подключения.",
-      '<button class="btn btn-outline" data-sync>↻ Обновить данные</button>')+
-    offlineNotice()+'<div class="stats">'+stat("Доступно на устройстве",items.length,"Загруженные карточки","▤")+
-    stat("В очереди",pending.filter(x=>!x.conflict).length,"Не подтверждены сервером","◷")+
-    stat("Конфликты",pending.filter(x=>x.conflict).length,"Требуют решения","⚠",true)+
-    stat("Сеть",navigator.onLine?"Онлайн":"Офлайн","Локальное сохранение работает","◉")+'</div>';
-  out+='<div class="mobile-grid">'+items.map(t=>'<div class="offline-card"><div class="offline-kicker">'+safe(t.priority)+' / #'+short(t.id)+'</div>'+
-    '<h3>'+safe(t.site)+'</h3><p>'+safe(t.description)+'</p><div>'+status(t.status)+'</div>'+
-    '<button class="btn btn-dark" data-work-ticket="'+safe(t.id)+'">Открыть чек-лист ↗</button></div>').join("")+'</div>';
-  out+=panel("Очередь синхронизации","Локальные UUID не считаются серверными записями",
-    '<div class="panel-body" id="queue-content">'+(pending.length?pending.map(x=>
-      '<div class="queue-row"><div><b>'+short(x.uuid)+'</b><div>'+safe(x.summary||"Запись о работах")+'</div>'+
-      '<small class="'+(x.conflict?"warning":"muted")+'">'+safe(x.conflict||"Ожидает доставки")+'</small></div>'+
-      (x.conflict?'<button class="btn btn-outline" data-review-conflict="'+safe(x.uuid)+'">Разобрать</button>':"")+'</div>').join(""):'<div class="empty">Очередь пуста.</div>')+'</div>');
+  const pending=await dbAll("queue");state.queue=pending;
+  const items=local.filter(x=>x.assignee_id===state.user.id&&["assigned","accepted","in_progress","returned"].includes(x.status));
+  let out=pageHead("ПОЛЕВОЙ МОДУЛЬ","Рабочее место инженера","Офлайн-карточки, чек-листы и подтверждённые сервером действия.",
+    '<button class="btn btn-outline" data-sync>↻ Обновить данные</button>')+
+    offlineNotice()+'<div class="stats">'+stat("Карточки на устройстве",items.length,"Сохранённые задания","▤")+
+    stat("В очереди",pending.filter(x=>!x.conflict).length,"Ещё не доставлены","◷")+
+    stat("Конфликты",pending.filter(x=>x.conflict).length,"Нужна проверка инженера","⚠",true)+
+    stat("Соединение",navigator.onLine?"Онлайн":"Офлайн","Состояние сети устройства","◉")+'</div>';
+  out+='<div class="section-divider"><h2>Мои задания</h2><span>'+items.length+' доступно локально</span></div>';
+  out+='<div class="mobile-grid">'+(items.length?items.map(t=>
+    '<article class="offline-card"><div class="offline-kicker">'+safe(t.priority)+' / #'+short(t.id)+'</div>'+
+    '<h3>'+safe(t.site)+'</h3><p>'+safe(t.description)+'</p>'+
+    '<div class="offline-meta">'+status(t.status)+' <span>'+safe(t.asset)+'</span></div>'+
+    '<button type="button" class="btn btn-dark" data-work-ticket="'+safe(t.id)+'">Открыть чек-лист ↗</button></article>').join(""):
+    '<div class="empty">На этом устройстве нет доступных заданий. Подключитесь к сети и обновите данные.</div>')+'</div>';
+  out+=panel("Очередь синхронизации","Записи остаются на устройстве до подтверждения сервера",
+    '<div class="panel-body" id="queue-content"><p class="sync-progress" id="sync-progress" role="status" aria-live="polite"></p>'+
+    (pending.length?pending.map(x=>
+      '<div class="queue-row"><div><b>#'+short(x.uuid)+'</b><div>'+safe(x.summary||"Запись о работах")+'</div>'+
+      '<small class="'+(x.conflict?"warning":"muted")+'">'+(x.conflict?"Требует проверки: "+safe(x.conflict):"Ожидает отправки")+'</small></div>'+
+      (x.conflict?'<button class="btn btn-outline" data-review-conflict="'+safe(x.uuid)+'">Разобрать ↗</button>':"")+
+      '</div>').join(""):'<div class="empty empty-compact">Очередь пуста. Все действия подтверждены.</div>')+'</div>');
   return out;
 }
+
 async function workTicket(id){
   const t=(await dbAll("tasks")).find(x=>x.id===id);
   if(!t)return toast("Карточка не найдена в локальном хранилище",true);
@@ -333,8 +501,12 @@ function adminEngineerModal(id){
   modal("Профиль инженера",body);
 }
 function updateNetwork(){
-  $("#network-led").classList.toggle("offline",!navigator.onLine);
-  $("#network-label").textContent=navigator.onLine?"Соединение активно":"Нет соединения";
+  const online=navigator.onLine;
+  $("#network-led").classList.toggle("offline",!online);
+  $("#network-label").textContent=online?"Соединение активно":"Нет соединения";
+  const indicator=$("#live-state");
+  if(indicator){indicator.innerHTML="<i></i> "+(online?"ONLINE":"OFFLINE");indicator.classList.toggle("offline",!online);
+    indicator.setAttribute("aria-label",online?"Система подключена":"Нет подключения к сети");}
 }
 async function dbOpen(databaseName){
   if(!databaseName&&!state.user?.id)throw new Error("Требуется вход для локального хранилища");
@@ -391,6 +563,8 @@ async function cacheTasks(){
     try{t.required=(await api("/tickets/"+t.id+"/checklist")).required;}catch{t.required=CHECKS[t.asset_kind]||[];}
     await dbPut("tasks",t);
   }
+  state.lastCached=new Date().toISOString();
+  try{localStorage.setItem("FieldPulseLastCached:"+state.user.id,state.lastCached);}catch{}
 }
 async function sync(){
   if(!navigator.onLine){toast("Нет соединения. Черновики сохранены локально.",true);return;}
@@ -402,6 +576,8 @@ async function sync(){
       if(pending.length){
         let applied=0;
         for(let offset=0;offset<pending.length;offset+=30){
+          const progress=$("#sync-progress");
+          if(progress)progress.textContent="Передача действий: "+(offset+1)+"–"+Math.min(pending.length,offset+30)+" из "+pending.length;
           const batch=pending.slice(offset,offset+30);
           const result=await api("/mobile/sync",{method:"POST",body:{actions:batch.map(({conflict,server_version,server_status,...x})=>x)}});
           for(const r of result.results){
@@ -463,11 +639,18 @@ async function refresh(){
 }
 async function setPage(page){
   if(!navItems().includes(page))page="overview";
+  if(window.innerWidth<=800)closeSidebar();
+  const content=$("#content");
+  if(content&&!content.children.length){
+    content.innerHTML='<div class="page-loading" role="status" aria-live="polite"><span class="section-kicker">ЗАГРУЗКА РАБОЧЕГО РАЗДЕЛА</span>'+
+      '<div class="skeleton skeleton-title"></div><div class="skeleton skeleton-subtitle"></div>'+
+      '<div class="skeleton-grid"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div>'+
+      '<div class="skeleton skeleton-card"></div></div></div>';
+  }
   state.page=page;state.filter="";
   setIdentity();
   if(page==="mobile"){try{$("#content").innerHTML=await mobilePage();}catch(err){toast(err.message,true);}}
   else {await refresh();}
-  if(window.innerWidth<800)$(".sidebar").classList.remove("open");
 }
 function render(){
   setIdentity();const el=$("#content");
@@ -492,6 +675,7 @@ async function loginSubmit(form){
   const obj=Object.fromEntries(new FormData(form));
   const user=await api("/auth/login",{method:"POST",body:obj});
   state.user=user;sessionStorage.setItem("fieldpulse-current-user",JSON.stringify(user));
+  try{state.lastCached=localStorage.getItem("FieldPulseLastCached:"+user.id)||null;}catch{}
   state.page=user.role==="engineer"?"mobile":"overview";
   viewAuth();if(user.role==="engineer")await migrateLegacy();
   await setPage(state.page);connectEvents();
@@ -509,7 +693,9 @@ async function init(){
   try{state.user=await api("/auth/me");sessionStorage.setItem("fieldpulse-current-user",JSON.stringify(state.user));}
   catch{if(!navigator.onLine){try{state.user=JSON.parse(sessionStorage.getItem("fieldpulse-current-user")||"null");}catch{}}}
   viewAuth();
-  if(state.user){state.page=state.user.role==="engineer"?"mobile":"overview";
+  if(state.user){
+    try{state.lastCached=localStorage.getItem("FieldPulseLastCached:"+state.user.id)||null;}catch{}
+    state.page=state.user.role==="engineer"?"mobile":"overview";
     if(state.user.role==="engineer")await migrateLegacy();
     await setPage(state.page);connectEvents();}
 }
@@ -518,6 +704,15 @@ document.addEventListener("click",async event=>{
   if(!el)return;
   try{
     if(el.matches("[data-page]")){await setPage(el.dataset.page);return;}
+    if(el.matches("[data-theme]")){
+      ui.theme=el.dataset.theme;savePrefs();applyAppearance();return;
+    }
+    if(el.matches("[data-density]")){
+      ui.density=el.dataset.density;savePrefs();applyAppearance();return;
+    }
+    if(el.matches("[data-ticket-page]")){
+      state.ticketPage=Number(el.dataset.ticketPage);updateTicketResults();return;
+    }
     if(el.matches("[data-close]")){closeModal();return;}
     if(el.matches("[data-create-ticket]")){await createTicketModal();return;}
     if(el.matches("[data-edit-policy]")){await adminPolicyModal();return;}
@@ -649,14 +844,59 @@ document.addEventListener("change",e=>{
       ['awaiting_access','awaiting_parts'].forEach(k=>$('input[name="'+k+'"]',e.target.form).checked=policy.allowed_pauses.includes(k));
     }
   }
-  if(e.target.id==="admin-site-select")state.adminSite=e.target.value;if(e.target.id==="new-site")loadAssets();if(e.target.id==="ticket-status-filter"){
-  const value=e.target.value;$("#ticket-table").innerHTML=table(state.tickets.filter(t=>(!state.filter||JSON.stringify(t).toLowerCase().includes(state.filter.toLowerCase()))&&(!value||t.status===value)));}});
-document.addEventListener("input",e=>{if(e.target.id==="ticket-search"){
-  state.filter=e.target.value;const selected=$("#ticket-status-filter")?.value;
-  $("#ticket-table").innerHTML=table(state.tickets.filter(t=>(!state.filter||JSON.stringify(t).toLowerCase().includes(state.filter.toLowerCase()))&&(!selected||t.status===selected)));}});
+  if(e.target.id==="admin-site-select")state.adminSite=e.target.value;
+  if(e.target.id==="new-site")loadAssets();
+  if(e.target.id==="ticket-status-filter"){state.ticketStatus=e.target.value;state.ticketPage=1;updateTicketResults();}
+  if(e.target.id==="ticket-priority-filter"){state.ticketPriority=e.target.value;state.ticketPage=1;updateTicketResults();}
+  if(e.target.id==="ticket-sort"){state.ticketSort=e.target.value;state.ticketPage=1;updateTicketResults();}
+});
+document.addEventListener("input",e=>{
+  if(e.target.id==="ticket-search"){state.filter=e.target.value;state.ticketPage=1;updateTicketResults();}
+  if(e.target.id==="site-search"){
+    state.siteFilter=e.target.value;
+    const siteGrid=$("#site-grid");if(siteGrid)siteGrid.innerHTML=siteCards();
+    const count=$("#site-count");if(count)count.textContent=state.sites.filter(s=>[s.name,s.city,s.area,s.timezone].some(x=>String(x||"").toLocaleLowerCase("ru").includes(state.siteFilter.trim().toLocaleLowerCase("ru")))).length+" найдено";
+  }
+});
+function closeSidebar(){
+  const sidebar=$(".sidebar"),backdrop=$("#sidebar-backdrop"),menu=$("#menu-toggle");
+  sidebar.classList.remove("open");backdrop.hidden=true;
+  menu.setAttribute("aria-expanded","false");menu.setAttribute("aria-label","Открыть меню");
+}
+function toggleSidebar(){
+  const sidebar=$(".sidebar"),backdrop=$("#sidebar-backdrop"),menu=$("#menu-toggle");
+  const opening=!sidebar.classList.contains("open");
+  sidebar.classList.toggle("open",opening);backdrop.hidden=!opening;
+  menu.setAttribute("aria-expanded",String(opening));
+  menu.setAttribute("aria-label",opening?"Закрыть меню":"Открыть меню");
+}
 $("#logout").addEventListener("click",logout);
-$("#menu-toggle").addEventListener("click",()=>$(".sidebar").classList.toggle("open"));
+$("#menu-toggle").addEventListener("click",toggleSidebar);
+$("#sidebar-backdrop").addEventListener("click",closeSidebar);
+$("#global-search").addEventListener("click",async()=>{
+  if(!state.user)return;
+  await setPage("tickets");$("#ticket-search")?.focus();
+});
 window.addEventListener("online",()=>{updateNetwork();if(state.user&&state.user.role==="engineer")sync();else if(state.user)refresh();connectEvents();});
 window.addEventListener("offline",()=>{updateNetwork();if(state.eventStream)state.eventStream.close();});
-document.addEventListener("keydown",e=>{if(e.key==="Escape")closeModal();});
+document.addEventListener("keydown",e=>{
+  const dialog=$("#modal-root .modal");
+  if(e.key==="Escape"){
+    if(dialog){e.preventDefault();closeModal();}
+    else if($(".sidebar").classList.contains("open"))closeSidebar();
+    return;
+  }
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"&&state.user){
+    e.preventDefault();$("#global-search").click();return;
+  }
+  if(e.key==="Tab"&&dialog){
+    const focusable=Array.from(dialog.querySelectorAll('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'))
+      .filter(el=>el.getClientRects().length>0);
+    if(!focusable.length)return;
+    const first=focusable[0],last=focusable[focusable.length-1];
+    if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+    else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+  }
+});
+applyAppearance();
 init().catch(err=>toast(err.message,true));

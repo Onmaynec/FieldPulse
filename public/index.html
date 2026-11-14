@@ -3,14 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#101318">
+  <meta name="theme-color" content="#0f1622">
+  <meta name="color-scheme" content="light dark">
   <meta name="description" content="FieldPulse — единая платформа диспетчеризации выездного сервиса">
   <link rel="manifest" href="/static/manifest.webmanifest">
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=0.4.0">
   <title>FieldPulse — сервис под контролем</title>
 </head>
 <body>
+  <a class="skip-link" href="#content">Перейти к содержимому</a>
   <div id="login" class="login-wrap" hidden>
     <div class="login-aside">
       <a class="brand brand-light" href="/"><span class="brand-mark">F<span></span></span><strong>FieldPulse</strong></a>
@@ -26,11 +28,11 @@
     <main class="login-main">
       <div class="login-card">
         <div class="login-symbol">↗</div>
-        <div class="section-kicker">РАБОЧЕЕ ПРОСТРАНСТВО</div>
+        <div class="section-kicker">ВХОД В FIELD PULSE</div>
         <h2>С возвращением</h2>
-        <p class="muted">Войдите в свою учётную запись FieldPulse.</p>
+        <p class="muted">Единое пространство для диспетчеров, заказчиков и выездных специалистов.</p>
         <form id="login-form" class="form-stack">
-          <label>Электронная почта<input name="email" type="email" required autocomplete="username" placeholder="name@company.ru"></label>
+          <label>Электронная почта<input name="email" type="email" required autocomplete="username" inputmode="email" placeholder="name@company.ru"></label>
           <label>Пароль<input name="password" type="password" required autocomplete="current-password" placeholder="••••••••"></label>
           <button class="btn btn-primary btn-wide" type="submit">Войти в систему <span>↗</span></button>
         </form>
@@ -45,25 +47,45 @@
           <p>Демо-пароль настраивается через DEMO_PASSWORD.</p>
         </div>
         <div id="login-error" class="login-error" role="alert"></div>
+        <div class="login-preferences">
+          <span>Оформление</span>
+          <div class="theme-control" role="group" aria-label="Оформление интерфейса">
+            <button type="button" class="theme-option" data-theme="light" aria-label="Светлая тема" title="Светлая тема">☀</button>
+            <button type="button" class="theme-option" data-theme="dark" aria-label="Тёмная тема" title="Тёмная тема">☾</button>
+          </div>
+        </div>
       </div>
     </main>
   </div>
   <div id="shell" class="app-shell" hidden>
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar" aria-label="Основная навигация">
       <div class="sidebar-top"><a class="brand" href="/"><span class="brand-mark">F<span></span></span><strong>FieldPulse</strong></a><div class="workspace-tag">OPERATIONS PLATFORM <span>01</span></div></div>
-      <div class="sidebar-group"><span class="sidebar-label">РАБОЧЕЕ ПРОСТРАНСТВО</span><nav id="navigation" class="nav"></nav></div>
+      <div class="sidebar-group"><span class="sidebar-label">РАБОЧЕЕ ПРОСТРАНСТВО</span><nav id="navigation" class="nav" aria-label="Разделы FieldPulse"></nav></div>
       <div class="sidebar-bottom">
         <div class="network-pill"><span id="network-led" class="network-led"></span><span id="network-label">Соединение активно</span></div>
-        <div class="user-panel"><div id="user-avatar" class="avatar">FP</div><div class="user-info"><strong id="user-name">Пользователь</strong><span id="user-role">Роль</span></div><button id="logout" class="icon-button" title="Выход">↗</button></div>
+        <div class="user-panel"><div id="user-avatar" class="avatar">FP</div><div class="user-info"><strong id="user-name">Пользователь</strong><span id="user-role">Роль</span></div><button id="logout" class="icon-button" type="button" aria-label="Выйти из аккаунта" title="Выйти из аккаунта">⇥</button></div>
       </div>
     </aside>
+    <button id="sidebar-backdrop" type="button" class="sidebar-backdrop" aria-label="Закрыть меню" hidden></button>
     <div class="app-main">
-      <header class="topbar"><button id="menu-toggle" class="icon-button mobile-only" aria-label="Меню">☰</button><div class="breadcrumb">FIELD SERVICE <span>/</span> <strong id="breadcrumb-current">Обзор</strong></div><div class="topbar-right"><div class="topbar-date" id="today-label"></div><div class="topbar-divider"></div><span class="live-indicator"><i></i> LIVE SYSTEM</span></div></header>
-      <div class="content" id="content"></div>
+      <header class="topbar">
+        <button id="menu-toggle" type="button" class="icon-button mobile-only" aria-controls="sidebar" aria-expanded="false" aria-label="Открыть меню">☰</button>
+        <div class="breadcrumb">FIELD PULSE <span>/</span> <strong id="breadcrumb-current">Обзор</strong></div>
+        <div class="topbar-right">
+          <button id="global-search" type="button" class="icon-button" aria-label="Поиск по заявкам" title="Поиск по заявкам">⌕</button>
+          <div class="theme-control" role="group" aria-label="Оформление интерфейса">
+            <button type="button" class="theme-option" data-theme="light" aria-label="Светлая тема" title="Светлая тема">☀</button>
+            <button type="button" class="theme-option" data-theme="dark" aria-label="Тёмная тема" title="Тёмная тема">☾</button>
+          </div>
+          <div class="topbar-date" id="today-label"></div><div class="topbar-divider"></div>
+          <span class="live-indicator" id="live-state" aria-label="Система подключена"><i></i> ONLINE</span>
+        </div>
+      </header>
+      <main class="content" id="content" tabindex="-1" aria-label="Рабочий раздел"></main>
     </div>
   </div>
   <div id="modal-root"></div>
-  <div id="toast" class="toast" role="status"></div>
-  <script src="/static/app.js" defer></script>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js?v=0.4.0" defer></script>
 </body>
 </html>
