@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from .db import SessionLocal
 from .api import router as api_router
+from .board import router as board_router
 from .registry_seek import router as seek_router
 from .mobile import router as mobile_router
 from .admin import router as admin_router
@@ -22,6 +23,7 @@ logger = logging.getLogger("fieldpulse")
 app = FastAPI(title="FieldPulse", version="0.6.0",
               description="Диспетчеризация инженеров, SLA и офлайн-синхронизация",
               docs_url="/api/docs", redoc_url=None)
+app.include_router(board_router)
 app.include_router(seek_router)  # Static seek route before /tickets/{ticket_id}.
 app.include_router(api_router)
 app.include_router(mobile_router)
