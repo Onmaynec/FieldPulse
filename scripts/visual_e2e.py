@@ -114,6 +114,14 @@ def test_role(browser, role, email):
             expect(page.locator(".mobile-grid")).to_be_visible(timeout=20000)
             assert_no_horizontal_overflow(page, "engineer mobile tasks")
             capture(page, "mobile-engineer-field")
+        if role == "dispatcher":
+            # Boundary widths and tablet: document must never grow beyond viewport.
+            for width in (320, 768, 1024, 2560):
+                page.set_viewport_size({"width": width, "height": 900})
+                assert_no_horizontal_overflow(page, "dispatcher width " + str(width))
+                expect(page.locator(".page-head h1")).to_be_visible()
+                if width in (320, 2560):
+                    capture(page, "responsive-dispatcher-" + str(width))
         assert not errors, (role, "Browser JavaScript exceptions", errors[:10])
     except BaseException:
         capture(page, "error-" + role)
