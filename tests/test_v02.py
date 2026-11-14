@@ -1,6 +1,6 @@
 """Regression scenarios for FieldPulse v0.2.0."""
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -160,8 +160,8 @@ def test_working_minutes_used_in_reaction_report(env):
     zone = ZoneInfo("Europe/Moscow")
     with Session() as db:
         row = db.get(Ticket, t["id"])
-        row.created_at = datetime(2026, 11, 13, 17, 50, tzinfo=zone)
-        row.accepted_at = datetime(2026, 11, 16, 9, 20, tzinfo=zone)
+        row.created_at = datetime(2026, 11, 13, 17, 50, tzinfo=zone).astimezone(timezone.utc)
+        row.accepted_at = datetime(2026, 11, 16, 9, 20, tzinfo=zone).astimezone(timezone.utc)
         db.commit()
     signin(client, "dispatcher@test.local")
     report = client.get("/api/v1/reports/overview")
