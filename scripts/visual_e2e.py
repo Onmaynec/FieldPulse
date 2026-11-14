@@ -88,7 +88,8 @@ def test_role(browser, role, email):
         page.locator('button[data-theme="dark"]').last.click()
         assert page.locator("html").get_attribute("data-theme") == "dark"
         capture(page, "desktop-" + role + "-tickets-dark")
-        page.reload(wait_until="networkidle")
+        page.reload(wait_until="domcontentloaded")
+        expect(page.locator("#shell")).to_be_visible(timeout=20000)
         assert page.locator("html").get_attribute("data-theme") == "dark", "Theme not persisted"
         # New tab starts from an overview, user remains logged in via cookie.
         page.locator('button[data-theme="light"]').last.click()
