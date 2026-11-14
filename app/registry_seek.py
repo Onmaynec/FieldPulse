@@ -18,6 +18,7 @@ from .api import serialize_ticket
 from .db import get_db
 from .models import Ticket, User
 from .security import SESSION_SECRET, current_user
+from .sla import aware
 from .ticket_queries import filtered_ticket_query, ticket_order
 
 router = APIRouter(prefix="/api/v1/tickets", tags=["registry"])
@@ -38,10 +39,10 @@ def query_signature(*, q, status, priority, sort, active, page_size):
 
 def key_for(row, sort):
     if sort == "priority":
-        return [row.priority, row.resolution_deadline.isoformat(), row.id]
+        return [row.priority, aware(row.resolution_deadline).isoformat(), row.id]
     if sort == "deadline":
         return [row.resolution_deadline.isoformat(), row.id]
-    return [row.created_at.isoformat(), row.id]
+    return [aware(row.created_at).isoformat(), row.id]
 
 
 def seek_condition(key, sort):
