@@ -598,7 +598,16 @@ async function migrateLegacy(){
 }
 async function cacheTasks(){
   if(!navigator.onLine)return;
-  const rows=await api("/tickets?limit=500");
+  // Read the entire active engineer scope, not only the first 500 global tickets.
+  // Do not modify the local cache until all pages have been fetched successfully.
+  const rows=[];
+  let page=1;
+  while(true){
+    const data=await api("/tickets/search?active=true&page_size=100&page="+page);
+    rows.push(...data.items);
+    if(page>=data.pages)break;
+    page++;
+  }
   const allowed=new Set(rows.filter(t=>t.assignee_id===state.user.id).map(t=>t.id));
   for(const saved of await dbAll("tasks"))if(!allowed.has(saved.id))await dbDel("tasks",saved.id);
   for(const t of rows)if(t.assignee_id===state.user.id){
