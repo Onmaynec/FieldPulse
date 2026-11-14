@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Index, Integer, JSON,
-    String, Text, UniqueConstraint
+    String, Text, UniqueConstraint, text
 )
 from .db import Base
 
@@ -222,3 +222,46 @@ class WorkerCycle(Base):
     cycles = Column(Integer, nullable=False, default=0)
     failures = Column(Integer, nullable=False, default=0)
     last_error_type = Column(String(80), nullable=True)
+
+
+class OperationalIncident(Base):
+    """One durable incident per loss-of-service interval; no ticket payloads."""
+    __tablename__ = "operational_incidents"
+    id = pk()
+    source = Column(String(32), nullable=False, default="sla", index=True)
+    state = Column(String(16), nullable=False)  # stale / error / unknown
+    opened_at = Column(DateTime(timezone=True), nullable=False, default=now)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False, default=now)
+    recovered_at = Column(DateTime(timezone=True), nullable=True)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    acknowledged_by_id = Column(String(32), ForeignKey("users.id"), nullable=True)
+    __table_args__ = (
+        Index("uq_operational_incident_open_source", "source", unique=True,
+              postgresql_where=text("recovered_at IS NULL"),
+              sqlite_where=text("recovered_at IS NULL")),
+    )
+
+
+class IncidentDelivery(Base):
+    """Independent retry journal for optional operator-configured HTTPS webhooks."""
+    __tablename__ = "incident_deliveries"
+    id = pk()
+    incident_id = Column(String(32), ForeignKey("operational_incidents.id"),
+                         nullable=False, index=True)
+    event = Column(String(12), nullable=False)  # opened / recovered
+    created_at = Column(DateTime(timezone=True), nullable=False, default=now)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=False, default=now, index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    last_error_type = Column(String(80), nullable=True)
+    __table_args__ = (
+        UniqueConstraint("incident_id", "event", name="uq_incident_delivery_event"),
+    )
+
+
+class MonitorCycle(Base):
+    """Independent watchdog health: stale monitor is visible to operators."""
+    __tablename__ = "monitor_cycles"
+    id = Column(String(32), primary_key=True)
+    last_success_at = Column(DateTime(timezone=True), nullable=True)
+    cycles = Column(Integer, nullable=False, default=0)
