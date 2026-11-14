@@ -208,3 +208,17 @@ class TicketView(Base):
     filters = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), nullable=False, default=now)
     __table_args__ = (UniqueConstraint("user_id", "name", name="uq_ticket_view_user_name"),)
+
+
+class WorkerCycle(Base):
+    """Persistent health record for a single worker process role."""
+    __tablename__ = "worker_cycles"
+    id = Column(String(32), primary_key=True)
+    last_started_at = Column(DateTime(timezone=True), nullable=True)
+    last_success_at = Column(DateTime(timezone=True), nullable=True)
+    last_failure_at = Column(DateTime(timezone=True), nullable=True)
+    last_duration_ms = Column(Integer, nullable=True)
+    last_emitted = Column(Integer, nullable=False, default=0)
+    cycles = Column(Integer, nullable=False, default=0)
+    failures = Column(Integer, nullable=False, default=0)
+    last_error_type = Column(String(80), nullable=True)

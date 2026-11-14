@@ -23,6 +23,7 @@ from .security import (
     verify_password
 )
 from .sla import aware, deadline, snapshot, working_minutes
+from .ticket_queries import filtered_ticket_query, ticket_order
 
 router = APIRouter(prefix="/api/v1")
 OPEN = ("new", "triage", "assigned", "accepted", "in_progress", "approval", "returned")
@@ -237,39 +238,9 @@ def search_tickets(page: int = Query(1, ge=1, le=100000),
                    active: bool = False,
                    user: User = Depends(current_user),
                    db: Session = Depends(get_db)):
-    query = (select(Ticket)
-             .join(Site, Site.id == Ticket.site_id)
-             .join(Asset, Asset.id == Ticket.asset_id)
-             .outerjoin(User, User.id == Ticket.assignee_id))
-    if user.role == "client":
-        query = query.where(Ticket.org_id == user.org_id)
-    elif user.role == "engineer":
-        query = query.where(Ticket.assignee_id == user.id)
-    if status:
-        query = query.where(Ticket.status == status)
-    if priority:
-        query = query.where(Ticket.priority == priority)
-    if active:
-        query = query.where(Ticket.status.in_(OPEN))
-    term = q.strip()
-    if term:
-        # Escape LIKE wildcards to make a literal search predictable.
-        escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        match = "%" + escaped + "%"
-        query = query.where(or_(
-            Ticket.id.ilike(match, escape="\\"),
-            Ticket.description.ilike(match, escape="\\"),
-            Site.name.ilike(match, escape="\\"),
-            Asset.name.ilike(match, escape="\\"),
-            User.name.ilike(match, escape="\\"),
-        ))
+    query = filtered_ticket_query(user, q=q, status=status, priority=priority, active=active)
     total = db.scalar(query.with_only_columns(func.count(Ticket.id)).order_by(None)) or 0
-    if sort == "priority":
-        query = query.order_by(Ticket.priority.asc(), Ticket.resolution_deadline.asc(), Ticket.id.desc())
-    elif sort == "deadline":
-        query = query.order_by(Ticket.resolution_deadline.asc(), Ticket.id.desc())
-    else:
-        query = query.order_by(Ticket.created_at.desc(), Ticket.id.desc())
+    query = query.order_by(*ticket_order(sort))
     rows = db.scalars(query.offset((page - 1) * page_size).limit(page_size)).all()
     return {"items": [serialize_ticket(db, ticket) for ticket in rows],
             "page": page, "page_size": page_size, "total": total,

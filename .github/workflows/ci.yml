@@ -52,11 +52,15 @@ jobs:
           docker compose run --rm seed
           docker compose exec -T api python -c "from app.db import SessionLocal; from app.models import Ticket,Site; from sqlalchemy import select,func; db=SessionLocal(); assert db.scalar(select(func.count(Ticket.id)))==2000; assert db.scalar(select(func.count(Site.id)))==120; db.close()"
           docker compose exec -T api python scripts/smoke.py
+          docker compose exec -T api python -m scripts.search_plan --repeats 5 --expected-min 2000 --output /tmp/fieldpulse-search-plan.json
+          docker cp "$(docker compose ps -q api):/tmp/fieldpulse-search-plan.json" fieldpulse-search-plan.json
+          docker compose exec -T worker python -m app.worker_health --check
           python -m pip install playwright==1.56.0 Pillow==11.1.0
           python -m playwright install --with-deps chromium
           python scripts/browser_e2e.py
           python scripts/visual_e2e.py
           python scripts/registry_e2e.py
+          python scripts/cursor_e2e.py
           docker compose exec -T api python -m app.backup create /tmp/fieldpulse-ci-backup.zip
           docker compose exec -T api python -m app.backup verify /tmp/fieldpulse-ci-backup.zip
           docker compose exec -T api python -m app.maintenance --limit 10
@@ -83,6 +87,13 @@ jobs:
         with:
           name: fieldpulse-v04-ui-screenshots
           path: visual-artifacts/*.png
+          if-no-files-found: ignore
+      - name: Store v0.6 PostgreSQL search evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fieldpulse-v06-postgres-plans
+          path: fieldpulse-search-plan.json
           if-no-files-found: ignore
       - name: Show logs on error
         if: failure()

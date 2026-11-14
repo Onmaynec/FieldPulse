@@ -13,6 +13,7 @@ from .db import get_db
 from .models import Event, Outbox, Pause, Site, Ticket, User, now
 from .security import roles
 from .sla import aware, working_minutes
+from .worker_health import snapshot
 from .api import fmt, percentile
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
@@ -157,5 +158,12 @@ def operations(user: User = Depends(STAFF), db: Session = Depends(get_db)):
         "oldest_pending_mock_age_seconds": max(0, int((current - aware(oldest)).total_seconds())) if oldest else None,
         "last_event_at": last_event.isoformat() if last_event else None,
         "observed_at": current.isoformat(),
+        "worker": snapshot(db),
         "note": "Mock notifications remain in outbox; there is no external delivery configured.",
     }
+
+
+@router.get("/worker-health")
+def worker_health(user: User = Depends(STAFF), db: Session = Depends(get_db)):
+    """Staff-only heartbeat, independent of whether an SLA event was emitted."""
+    return snapshot(db)

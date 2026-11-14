@@ -84,3 +84,20 @@ JSON-результат содержит задержки p50/p95, ошибки 
 Проверка: `pytest -q tests/test_v05.py` и `python scripts/registry_e2e.py` при запущенном демонстрационном Compose. В CI выполняются также старые offline и visual E2E.
 
 `oldest_pending_mock_age_seconds` — не healthcheck worker, а время с момента самой старой записи, не помеченной отправленной. Никакого внешнего канала доставки сейчас не настроено. Service Worker `fieldpulse-shell-v5` обновляет оболочку при первом онлайн-запуске.
+
+
+## v0.6.0 — устранение отказа SLA worker
+
+1. До обновления создайте и проверьте резервную копию PostgreSQL и медиа. Запустите `docker compose up -d --build`, дождитесь миграции `0004_worker_observability` и доступности API.
+2. Проверьте `docker compose ps` и `docker compose exec -T worker python -m app.worker_health --check`. Код выхода 0 означает зарегистрированный свежий успешный проход, но не отправку внешних уведомлений.
+3. Диспетчер, администратор и руководитель видят `GET /api/v1/reports/worker-health` или карточку worker в аналитике. Поля: `state`, `seconds_since_success`, `last_success_at`, `last_failure_at`, `last_duration_ms`, `last_error_type`, `cycles`, `failures`.
+4. Если `error` — проверьте `docker compose logs --tail 200 worker` и PostgreSQL. Если `stale` (более **75 секунд** без успешного прохода), проверьте блокировки/CPU/подключение к БД. Если `unknown` — проверьте, начал ли процесс выполнять цикл. После исправления подтверждайте движение `last_success_at` и отсутствие дублей SLA-событий.
+5. Внешнее оповещение о состоянии worker и доставка mock inbox пока не настроены: рост очереди не является подтверждением работы или остановки сканера.
+
+## v0.6.0 — PostgreSQL планы запросов
+
+На тестовом Compose запустите `docker compose exec -T api python -m scripts.search_plan --repeats 7 --expected-min 2000 --output /tmp/fieldpulse-search-plan.json`. Скрипт измеряет SQL EXPLAIN ANALYZE, буферы и p50/p95 времени запросов без записи новых заявок. CI сохраняет JSON в артефакт `fieldpulse-v06-postgres-plans`.
+
+Опционально на отдельном тестовом PostgreSQL: `--generate 50000 --allow-demo-write` или `--generate 200000 --allow-demo-write`. Новые заявки находятся в транзакции и откатываются; ресурсная нагрузка настоящая, не запускать на продуктивной системе.
+
+Курсор `GET /api/v1/tickets/seek?page_size=20&sort=deadline` выдаёт `next_cursor` для следующего шага. Он действует максимум час, и его нельзя переносить между пользователями и фильтрами. Нумерованные страницы остались в `/tickets/search`.
