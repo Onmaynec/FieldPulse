@@ -1,37 +1,37 @@
-"""FieldPulse disaster recovery: PostgreSQL + S3 archive with SHA-256 manifest.
+"""PostgreSQL + S3 backup archive with SHA-256 manifest and isolated restore.
 
-Usage inside API container:
-  python -m app.backup create /tmp/fieldpulse-backup.zip
-  python -m app.backup verify /tmp/fieldpulse-backup.zip
-  python -m app.backup restore /tmp/fieldpulse-backup.zip --confirm-empty
+Create only during a maintenance window with application writers stopped:
+  python -m app.backup create /backups/fieldpulse.zip --maintenance-confirmed
+Verify without changing services:
+  python -m app.backup verify /backups/fieldpulse.zip
+Restore ONLY into a fresh, isolated, empty database and bucket:
+  python -m app.backup restore /backups/fieldpulse.zip --confirm-empty
 
-Restore is intended ONLY for a new empty isolated instance with API and worker
-stopped. PostgreSQL restore and S3 upload cannot be an atomic transaction.
+PostgreSQL pg_dump is transactionally consistent. S3 enumeration is not part
+of that transaction, so stopping API/worker/monitor is required for a
+cross-store point-in-time copy. PostgreSQL and S3 restore are not atomic.
 """
 import argparse
 import hashlib
 import json
-import shutil
 import os
+import shutil
 import subprocess
 import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select, text
 from sqlalchemy.engine import make_url
 
-from .db import DATABASE_URL, SessionLocal
-from .media import BUCKET, client
-from .models import Organization, Ticket, User
+from .db import Base, DATABASE_URL, SessionLocal, engine
+from . import models as _models  # Register every model in Base.metadata.
+from .media import BUCKET, bucket_ready, client
+from .models import Attachment, Organization, Ticket, User
 
 FORMAT = "fieldpulse-backup-1"
-MAX_MEMBER = 1024 * 1024 * 1024  # Abort suspicious, oversized archives.
-
-
-def digest(blob):
-    return hashlib.sha256(blob).hexdigest()
+MAX_MEMBER = 1024 * 1024 * 1024  # Refuse a single archive member over 1 GiB.
 
 
 def checksum_file(path):
@@ -44,170 +44,267 @@ def checksum_file(path):
     return {"sha256": hasher.hexdigest(), "bytes": size}
 
 
-def checksum_archive_entry(archive, name):
+def checksum_stream(stream):
     hasher = hashlib.sha256()
     size = 0
-    with archive.open(name) as src:
-        for chunk in iter(lambda: src.read(1024 * 1024), b""):
-            size += len(chunk)
-            hasher.update(chunk)
+    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+        hasher.update(chunk)
+        size += len(chunk)
     return {"sha256": hasher.hexdigest(), "bytes": size}
+
+
+def checksum_archive_entry(archive, name):
+    with archive.open(name) as stream:
+        return checksum_stream(stream)
+
+
+def checksum_s3_object(s3, key):
+    response = s3.get_object(Bucket=BUCKET, Key=key)
+    stream = response["Body"]
+    try:
+        return checksum_stream(stream)
+    finally:
+        stream.close()
 
 
 def pg_command(program, filename):
     url = make_url(DATABASE_URL)
     if url.get_backend_name() != "postgresql":
         raise RuntimeError("Backup/restore requires PostgreSQL")
-    cmd = [program, "--host", url.host or "localhost",
-           "--port", str(url.port or 5432),
-           "--username", url.username or "fieldpulse", "--dbname", url.database]
-    env = {**os.environ, "PGPASSWORD": url.password or ""}
+    command = [
+        program, "--host", url.host or "localhost",
+        "--port", str(url.port or 5432),
+        "--username", url.username or "fieldpulse",
+        "--dbname", url.database,
+    ]
+    environment = {**os.environ, "PGPASSWORD": url.password or ""}
     if program == "pg_dump":
-        cmd += ["--format=custom", "--no-owner", "--no-acl", "--file", str(filename)]
+        command += ["--format=custom", "--no-owner", "--no-acl",
+                    "--file", str(filename)]
+    elif program == "pg_restore":
+        command += ["--clean", "--if-exists", "--no-owner", "--no-acl",
+                    "--exit-on-error", "--single-transaction", str(filename)]
     else:
-        cmd += ["--clean", "--if-exists", "--no-owner", "--no-acl",
-                "--single-transaction", str(filename)]
-    return cmd, env
+        raise ValueError("Unsupported PostgreSQL backup program")
+    return command, environment
 
 
 def run_pg(program, filename):
-    cmd, env = pg_command(program, filename)
-    subprocess.run(cmd, env=env, check=True, capture_output=True, timeout=300)
+    command, environment = pg_command(program, filename)
+    try:
+        subprocess.run(command, env=environment, check=True,
+                       capture_output=True, timeout=900)
+    except subprocess.CalledProcessError as error:
+        # Do not forward command output: it may contain database names or paths.
+        raise RuntimeError("%s failed with exit code %s" %
+                           (program, error.returncode)) from None
 
 
-def store_archive(out):
+def database_report():
+    inspector = inspect(engine)
+    present = set(inspector.get_table_names())
+    expected = set(Base.metadata.tables)
+    missing = expected - present
+    if missing:
+        raise RuntimeError("Restored schema is incomplete: " + ", ".join(sorted(missing)))
+    with SessionLocal() as db:
+        counts = {
+            name: int(db.scalar(select(func.count()).select_from(Base.metadata.tables[name])) or 0)
+            for name in sorted(expected)
+        }
+        revision = None
+        if "alembic_version" in present:
+            revision = db.execute(text("SELECT version_num FROM alembic_version")).scalar()
+    return {"tables": counts, "alembic_revision": revision}
+
+
+def store_archive(out, *, maintenance_confirmed=False):
+    if not maintenance_confirmed:
+        raise RuntimeError(
+            "Backup requires --maintenance-confirmed: stop API, worker and monitor first"
+        )
     target = Path(out).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         raise FileExistsError("Refusing to overwrite existing backup: " + str(target))
+    staging = target.with_name(target.name + ".partial")
+    if staging.exists():
+        raise FileExistsError(staging)
+
     s3 = client()
     s3.head_bucket(Bucket=BUCKET)
-    with tempfile.TemporaryDirectory() as tmp:
-        pg = Path(tmp) / "database.dump"
-        run_pg("pg_dump", pg)
-        names = {}
-        staging = target.with_name(target.name + ".partial")
-        if staging.exists():
-            raise FileExistsError(staging)
-        try:
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            pg = Path(tmp) / "database.dump"
+            run_pg("pg_dump", pg)
+            members = {}
             with zipfile.ZipFile(staging, "w", compression=zipfile.ZIP_STORED,
-                                 allowZip64=True) as z:
-                z.write(pg, "postgres/database.dump")
-                names["postgres/database.dump"] = checksum_file(pg)
+                                 allowZip64=True) as archive:
+                archive.write(pg, "postgres/database.dump")
+                members["postgres/database.dump"] = checksum_file(pg)
                 paginator = s3.get_paginator("list_objects_v2")
-                for part in paginator.paginate(Bucket=BUCKET):
-                    for item in part.get("Contents", []):
+                for page in paginator.paginate(Bucket=BUCKET):
+                    for item in page.get("Contents", []):
                         key = item["Key"]
-                        if not key.startswith("tickets/") or ".." in key.split("/"):
-                            raise ValueError("Unexpected object key: " + key)
-                        path = "s3/" + key
-                        if path in names:
-                            raise ValueError("Duplicate key: " + key)
-                        stream = s3.get_object(Bucket=BUCKET, Key=key)["Body"]
-                        hasher = hashlib.sha256()
-                        size = 0
+                        if (not key.startswith("tickets/")
+                                or ".." in key.split("/")
+                                or "\\" in key):
+                            raise ValueError("Unexpected object key in storage")
+                        name = "s3/" + key
+                        if name in members:
+                            raise ValueError("Duplicate object key in storage")
+                        response = s3.get_object(Bucket=BUCKET, Key=key)
+                        stream = response["Body"]
                         try:
-                            with z.open(path, "w") as dest:
+                            with archive.open(name, "w") as destination:
+                                digest = hashlib.sha256()
+                                size = 0
                                 for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                                    destination.write(chunk)
+                                    digest.update(chunk)
                                     size += len(chunk)
-                                    hasher.update(chunk)
-                                    dest.write(chunk)
+                            members[name] = {"sha256": digest.hexdigest(), "bytes": size}
                         finally:
                             stream.close()
-                        names[path] = {"sha256": hasher.hexdigest(), "bytes": size}
                 manifest = {
                     "format": FORMAT,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "bucket": BUCKET,
-                    "members": names,
+                    "snapshot_policy": (
+                        "PostgreSQL pg_dump snapshot; S3 copied sequentially. "
+                        "Application writers must remain stopped for the full operation."
+                    ),
+                    "members": members,
                 }
-                z.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
-            staging.replace(target)
-        except BaseException:
-            staging.unlink(missing_ok=True)
-            raise
-    return {"path": str(target), "members": len(names),
-            "s3_objects": len(names) - 1}
+                archive.writestr("manifest.json",
+                                 json.dumps(manifest, indent=2, ensure_ascii=False))
+        staging.replace(target)
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
+    return {"path": str(target), "members": len(members),
+            "s3_objects": len(members) - 1, "bytes": target.stat().st_size}
 
 
 def verify_archive(path):
     with zipfile.ZipFile(path, "r") as archive:
         entries = archive.infolist()
-        entry_names = [item.filename for item in entries]
-        if len(entry_names) != len(set(entry_names)):
-            raise ValueError("Archive contains repeated filenames")
-        if "manifest.json" not in entry_names:
+        names = [entry.filename for entry in entries]
+        if len(names) != len(set(names)):
+            raise ValueError("Archive contains duplicate filenames")
+        if "manifest.json" not in names:
             raise ValueError("Backup manifest is missing")
         manifest = json.loads(archive.read("manifest.json"))
-        if manifest.get("format") != FORMAT:
+        if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
             raise ValueError("Unsupported backup format")
         members = manifest.get("members")
-        if not isinstance(members, dict) or "postgres/database.dump" not in members:
+        if (not isinstance(members, dict)
+                or "postgres/database.dump" not in members
+                or not isinstance(manifest.get("bucket"), str)
+                or not manifest["bucket"]):
             raise ValueError("Invalid backup manifest")
-        if set(entry_names) != set(members) | {"manifest.json"}:
+        if set(names) != set(members) | {"manifest.json"}:
             raise ValueError("Archive and manifest list different entries")
-        for item in entries:
-            if item.filename == "manifest.json":
+        for entry in entries:
+            name = entry.filename
+            if name == "manifest.json":
                 continue
-            if (item.file_size > MAX_MEMBER or item.filename.startswith("/")
-                or "\\" in item.filename or ".." in item.filename.split("/")):
+            if (entry.file_size > MAX_MEMBER or name.startswith("/")
+                    or "\\" in name or ".." in name.split("/")):
                 raise ValueError("Unsafe backup entry")
-            if item.filename != "postgres/database.dump" and not item.filename.startswith("s3/tickets/"):
+            if name != "postgres/database.dump" and not name.startswith("s3/tickets/"):
                 raise ValueError("Unexpected backup entry")
-            expected = members[item.filename]
-            observed = checksum_archive_entry(archive, item.filename)
-            if not isinstance(expected, dict) or expected != observed:
-                raise ValueError("Checksum mismatch: " + item.filename)
+            expected = members[name]
+            if (not isinstance(expected, dict)
+                    or not isinstance(expected.get("sha256"), str)
+                    or len(expected["sha256"]) != 64
+                    or type(expected.get("bytes")) is not int
+                    or expected["bytes"] < 0):
+                raise ValueError("Invalid checksum manifest entry")
+            observed = checksum_archive_entry(archive, name)
+            if expected != observed:
+                raise ValueError("Checksum mismatch: " + name)
         return {"valid": True, "members": len(members),
                 "s3_objects": len(members) - 1, "manifest": manifest}
 
 
+def ensure_empty_target():
+    tables = set(inspect(engine).get_table_names())
+    application_tables = tables - {"alembic_version"}
+    if application_tables:
+        raise RuntimeError(
+            "Restore requires a fresh database without application tables; found: "
+            + ", ".join(sorted(application_tables))
+        )
+    if "alembic_version" in tables:
+        with engine.connect() as connection:
+            if connection.execute(text("SELECT COUNT(*) FROM alembic_version")).scalar():
+                raise RuntimeError("Restore target already has an Alembic revision")
+
+
 def restore_archive(path):
-    report = verify_archive(path)  # Validate before touching PostgreSQL/S3.
+    report = verify_archive(path)
     if report["manifest"]["bucket"] != BUCKET:
         raise ValueError("Backup bucket does not match target S3_BUCKET")
-    with SessionLocal() as db:
-        if (db.scalar(select(func.count(Organization.id))) or 0) > 0 or (
-            db.scalar(select(func.count(User.id))) or 0) > 0 or (
-            db.scalar(select(func.count(Ticket.id))) or 0) > 0:
-            raise RuntimeError("Restore only to an EMPTY database")
+
+    # Validate both destinations before the first write.
+    ensure_empty_target()
     s3 = client()
-    objects = s3.list_objects_v2(Bucket=BUCKET, MaxKeys=1)
-    if objects.get("KeyCount", 0):
-        raise RuntimeError("Restore only to an EMPTY object-storage bucket")
+    bucket_ready(s3)
+    if s3.list_objects_v2(Bucket=BUCKET, MaxKeys=1).get("KeyCount", 0):
+        raise RuntimeError("Restore requires an empty object-storage bucket")
+
     with tempfile.TemporaryDirectory() as tmp, zipfile.ZipFile(path) as archive:
-        dest = Path(tmp) / "database.dump"
-        with archive.open("postgres/database.dump") as src, dest.open("wb") as target:
-            shutil.copyfileobj(src, target, length=1024 * 1024)
-        run_pg("pg_restore", dest)
+        dump = Path(tmp) / "database.dump"
+        with archive.open("postgres/database.dump") as source, dump.open("wb") as target:
+            shutil.copyfileobj(source, target, length=1024 * 1024)
+        run_pg("pg_restore", dump)
+
+        # Verify schema and row readability before starting the API.
+        database = database_report()
         restored = 0
-        for filename in report["manifest"]["members"]:
-            if filename.startswith("s3/"):
-                key = filename[3:]
-                with archive.open(filename) as obj:
-                    s3.upload_fileobj(obj, BUCKET, key,
-                                      ExtraArgs={"ContentType": "image/jpeg"})
-                restored += 1
+        for name, expected in report["manifest"]["members"].items():
+            if not name.startswith("s3/"):
+                continue
+            key = name[3:]
+            with archive.open(name) as source:
+                s3.upload_fileobj(source, BUCKET, key,
+                                  ExtraArgs={"ContentType": "image/jpeg"})
+            observed = checksum_s3_object(s3, key)
+            if observed != expected:
+                raise RuntimeError(
+                    "Restored object checksum mismatch; discard this isolated target"
+                )
+            restored += 1
+
     return {"restored_s3_objects": restored,
-            "note": "Restore is not atomic across PostgreSQL and S3; verify immediately."}
+            "database": database,
+            "note": (
+                "PostgreSQL schema and S3 object hashes verified. "
+                "Database and object storage are not an atomic transaction."
+            )}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="FieldPulse backup and verification")
+    parser = argparse.ArgumentParser(description="FieldPulse PostgreSQL/S3 backup and recovery")
     parser.add_argument("action", choices=("create", "verify", "restore"))
     parser.add_argument("archive", type=Path)
+    parser.add_argument("--maintenance-confirmed", action="store_true",
+                        help="Confirm API, worker and monitor are stopped")
     parser.add_argument("--confirm-empty", action="store_true",
-                        help="Acknowledge recovery on a new isolated, empty instance")
+                        help="Confirm this is a new isolated empty database and bucket")
     args = parser.parse_args()
     if args.action == "create":
-        print(json.dumps(store_archive(args.archive), ensure_ascii=False))
+        result = store_archive(args.archive,
+                               maintenance_confirmed=args.maintenance_confirmed)
     elif args.action == "verify":
         report = verify_archive(args.archive)
-        print(json.dumps({k: v for k, v in report.items() if k != "manifest"}, ensure_ascii=False))
+        result = {key: value for key, value in report.items() if key != "manifest"}
     else:
         if not args.confirm_empty:
-            parser.error("restore requires --confirm-empty and a stopped API/worker")
-        print(json.dumps(restore_archive(args.archive), ensure_ascii=False))
+            parser.error("restore requires --confirm-empty")
+        result = restore_archive(args.archive)
+    print(json.dumps(result, ensure_ascii=False))
 
 
 if __name__ == "__main__":

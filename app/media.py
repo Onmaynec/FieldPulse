@@ -1,5 +1,6 @@
 import hashlib
 import io
+import logging
 import os
 import uuid
 
@@ -10,6 +11,8 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 Image.MAX_IMAGE_PIXELS = 25000000
 BUCKET = os.getenv("S3_BUCKET", "fieldpulse")
+logger = logging.getLogger("fieldpulse.media")
+
 
 def client():
     return boto3.client(
@@ -19,6 +22,7 @@ def client():
         region_name="us-east-1"
     )
 
+
 def bucket_ready(c):
     try:
         c.head_bucket(Bucket=BUCKET)
@@ -27,6 +31,26 @@ def bucket_ready(c):
             c.create_bucket(Bucket=BUCKET)
         else:
             raise
+
+
+def delete_image(image):
+    """Best-effort compensation when the matching database transaction rolls back."""
+    storage = image.get("storage_key")
+    thumbnail = image.get("thumb_key")
+    if not storage and not thumbnail:
+        return True
+    c = client()
+    ok = True
+    for key in (storage, thumbnail):
+        if not key:
+            continue
+        try:
+            c.delete_object(Bucket=BUCKET, Key=key)
+        except (ClientError, BotoCoreError):
+            ok = False
+            logger.warning("Could not remove an uncommitted media object")
+    return ok
+
 
 def save_image(data: bytes, ticket_id: str):
     if len(data) > 10 * 1024 * 1024:
@@ -44,20 +68,33 @@ def save_image(data: bytes, ticket_id: str):
             thumb.save(reduced, format="JPEG", quality=75)
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
         raise HTTPException(415, detail="Некорректное изображение")
+
     key = "tickets/%s/%s.jpg" % (ticket_id, uuid.uuid4().hex)
     thumb_key = key.replace(".jpg", "-thumb.jpg")
-    c = client()
-    try:
-        bucket_ready(c)
-        c.put_object(Bucket=BUCKET, Key=key, Body=original.getvalue(), ContentType="image/jpeg")
-        c.put_object(Bucket=BUCKET, Key=thumb_key, Body=reduced.getvalue(), ContentType="image/jpeg")
-    except (ClientError, BotoCoreError):
-        raise HTTPException(503, detail="Хранилище фотографий недоступно")
-    return {
+    image = {
         "storage_key": key, "thumb_key": thumb_key,
         "checksum": hashlib.sha256(original.getvalue()).hexdigest(),
         "mime": "image/jpeg", "size": len(original.getvalue())
     }
+    c = client()
+    uploaded = []
+    try:
+        bucket_ready(c)
+        c.put_object(Bucket=BUCKET, Key=key, Body=original.getvalue(),
+                     ContentType="image/jpeg")
+        uploaded.append(key)
+        c.put_object(Bucket=BUCKET, Key=thumb_key, Body=reduced.getvalue(),
+                     ContentType="image/jpeg")
+        uploaded.append(thumb_key)
+    except (ClientError, BotoCoreError):
+        for uploaded_key in uploaded:
+            try:
+                c.delete_object(Bucket=BUCKET, Key=uploaded_key)
+            except (ClientError, BotoCoreError):
+                logger.warning("Partial image upload left an orphaned object")
+        raise HTTPException(503, detail="Хранилище фотографий недоступно")
+    return image
+
 
 def read_image(key: str):
     try:

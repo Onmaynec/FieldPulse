@@ -11,13 +11,14 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .api import emit, fmt, serialize_ticket, template, ticket_for
 from .db import get_db
 from .models import Attachment, Ticket, User, Worklog, now
 from .security import current_user, roles
-from .media import save_image, read_image
+from .media import save_image, read_image, delete_image
 
 router = APIRouter(prefix="/api/v1")
 
@@ -102,6 +103,7 @@ def sync(batch: Batch, user: User = Depends(roles("engineer")),
         except (binascii.Error, ValueError) as exc:
             results.append({"uuid": key, "status": "invalid", "reason": str(exc)})
             continue
+        uploaded_images = []
         try:
             w = Worklog(ticket_id=t.id, engineer_id=user.id, action_uuid=key,
                         request_hash=fingerprint, summary=action.summary, checklist=action.checklist,
@@ -110,6 +112,7 @@ def sync(batch: Batch, user: User = Depends(roles("engineer")),
             db.flush()
             for _, raw in decoded:
                 image = save_image(raw, t.id)
+                uploaded_images.append(image)
                 db.add(Attachment(ticket_id=t.id, worklog_id=w.id, uploader_id=user.id, **image))
             t.version += 1
             emit(db, t, "worklog_synced", user.id,
@@ -120,8 +123,28 @@ def sync(batch: Batch, user: User = Depends(roles("engineer")),
             advanced[t.id] = {"base": action.base_version, "version": t.version}
             results.append({"uuid": key, "status": "applied", "worklog_id": w.id,
                             "server_at": fmt(w.server_at), "server_version": t.version})
+        except IntegrityError:
+            # A UUID may race on two different ticket rows. The unique
+            # (engineer_id, action_uuid) constraint is the final authority.
+            db.rollback()
+            for image in uploaded_images:
+                delete_image(image)
+            concurrent = db.scalar(select(Worklog).where(
+                Worklog.engineer_id == user.id, Worklog.action_uuid == key))
+            if concurrent:
+                if concurrent.request_hash == fingerprint:
+                    results.append({"uuid": key, "status": "duplicate",
+                                    "worklog_id": concurrent.id,
+                                    "server_at": fmt(concurrent.server_at)})
+                else:
+                    results.append({"uuid": key, "status": "conflict",
+                                    "reason": "UUID_REUSED_WITH_DIFFERENT_PAYLOAD"})
+                continue
+            raise
         except Exception:
             db.rollback()
+            for image in uploaded_images:
+                delete_image(image)
             raise
     return {"results": results, "server_at": fmt(now())}
 
@@ -137,10 +160,15 @@ async def upload_photo(ticket_id: str, file: UploadFile = File(...),
     if len(raw) > 10 * 1024 * 1024:
         raise HTTPException(413, detail="Лимит файла 10 МБ")
     image = save_image(raw, t.id)
-    a = Attachment(ticket_id=t.id, uploader_id=user.id, **image)
-    db.add(a)
-    emit(db, t, "photo_uploaded", user.id, {"checksum": image["checksum"]})
-    db.commit()
+    try:
+        a = Attachment(ticket_id=t.id, uploader_id=user.id, **image)
+        db.add(a)
+        emit(db, t, "photo_uploaded", user.id, {"checksum": image["checksum"]})
+        db.commit()
+    except Exception:
+        db.rollback()
+        delete_image(image)
+        raise
     return {"id": a.id, "checksum": a.checksum}
 
 @router.get("/tickets/{ticket_id}/attachments")
