@@ -242,36 +242,59 @@ async function loadAssets(){
   catch(err){toast(err.message,true);}
 }
 async function details(id){
-  const t=await api("/tickets/"+id);state.selected=t;
-  const timeline=await api("/tickets/"+id+"/timeline");state.timeline=timeline;
+  const t=await api("/tickets/"+encodeURIComponent(id));state.selected=t;
+  const [history,photos,logs]=await Promise.all([
+    api("/tickets/"+encodeURIComponent(id)+"/timeline"),
+    api("/tickets/"+encodeURIComponent(id)+"/attachments"),
+    api("/tickets/"+encodeURIComponent(id)+"/worklogs"),
+  ]);
+  state.timeline=history;
   const canStaff=["admin","dispatcher","manager"].includes(state.user.role);
   const isEngineer=state.user.role==="engineer";
-  let buttons=[];
-  function action(label,key,style="btn-outline"){buttons.push('<button class="btn '+style+'" data-task-action="'+key+'">'+label+'</button>');}
+  const actions=[];
+  function action(label,key,style="btn-outline"){actions.push('<button type="button" class="btn '+style+'" data-task-action="'+key+'">'+label+'</button>');}
   if(canStaff&&t.status==="new")action("Взять в триаж","triage");
   if(canStaff&&["new","triage","returned"].includes(t.status))action("Назначить инженера","assign","btn-primary");
-  if(canStaff)action("Сверка SLA","reconcile");
+  if(canStaff)action("Сверить SLA","reconcile");
   if(isEngineer&&t.status==="assigned")action("Принять заявку","accept","btn-primary");
   if(isEngineer&&["accepted","returned"].includes(t.status))action("Начать работы","start","btn-primary");
   if(canStaff&&["assigned","accepted","in_progress"].includes(t.status))action("Пауза SLA","pause");
   if(canStaff&&["assigned","accepted","in_progress"].includes(t.status))action("Возобновить SLA","resume");
   if(canStaff&&["new","triage","assigned","accepted","in_progress","returned"].includes(t.status))action("Отменить","cancel","btn-red");
   if(isEngineer&&t.status==="in_progress")action("Оформить акт","submit","btn-primary");
-  const desc='<div>'+priority(t.priority)+' '+status(t.status)+' <span class="muted">Версия '+t.version+'</span></div>'+
-    '<h3 style="font-size:17px;margin:17px 0 5px">'+safe(t.description)+'</h3><p class="muted">'+safe(t.site)+' / '+safe(t.asset)+'</p>'+
+  const gallery=photos.length?
+    '<div class="photo-grid">'+photos.map(p=>
+      '<a class="photo-frame" target="_blank" rel="noopener noreferrer" href="/api/v1/attachments/'+encodeURIComponent(p.id)+'" aria-label="Открыть фото '+short(p.id)+'">'+
+      '<img loading="lazy" alt="Фотография заявки '+short(t.id)+'" src="/api/v1/attachments/'+encodeURIComponent(p.id)+'?thumb=true">'+
+      '<span>Фото '+short(p.id)+' · '+Math.round(p.size/1024)+' КиБ</span></a>').join("")+'</div>':
+    '<div class="empty empty-compact">Фотографии пока не добавлены.</div>';
+  const chronology=history.length?history.map(e=>
+    '<div class="timeline-entry"><b>'+safe(e.type.replaceAll("_"," "))+'</b><small>'+date(e.at,t.timezone)+'</small>'+
+    (e.data&&(e.data.text||e.data.reason)?'<p>'+safe(e.data.text||e.data.reason)+'</p>':"")+'</div>').join(""):
+    '<div class="muted">Событий пока нет.</div>';
+  const work=logs.length?logs.map(w=>
+    '<div class="worklog-entry"><strong>'+safe(w.summary||"Запись о выполненных работах")+'</strong><small>'+date(w.server_at,t.timezone)+
+    ' · '+(w.materials||[]).length+' материалов</small></div>').join(""):
+    '<p class="muted">Записей о выполненных работах ещё нет.</p>';
+  const body='<div class="detail-summary"><div class="sla-digest">'+priority(t.priority)+status(t.status)+
+    '<span class="muted">Редакция '+t.version+'</span></div>'+
+    '<h3>'+safe(t.description)+'</h3><p>'+safe(t.site)+' · '+safe(t.asset)+'</p>'+
+    '<div class="sla-digest">'+slaDeadline(t)+' <small>· Политика '+safe(t.sla.policy_name)+'</small></div></div>'+
     '<div class="detail-meta"><div><small>Создана</small><strong>'+date(t.created_at,t.timezone)+'</strong></div>'+
     '<div><small>Реакция до</small><strong>'+date(t.reaction_deadline,t.timezone)+'</strong></div>'+
     '<div><small>Решение до</small><strong>'+date(t.resolution_deadline,t.timezone)+'</strong></div></div>'+
-    '<p class="muted" style="font-size:10px">Часовой пояс объекта: '+safe(t.timezone)+' · Политика '+safe(t.sla.policy_name)+'</p>'+
-    '<div class="detail-buttons">'+buttons.join("")+'</div><h3 class="subheading">ХРОНОЛОГИЯ СОБЫТИЙ</h3>'+
-    '<div class="timeline">'+timeline.map(e=>'<div class="timeline-entry"><b>'+safe(e.type.replaceAll("_"," "))+'</b>'+
-      '<small>'+date(e.at,t.timezone)+'</small>'+(e.data && (e.data.text||e.data.reason)?
-      '<p>'+safe(e.data.text||e.data.reason)+'</p>':"")+'</div>').join("")+'</div>'+
-    '<div class="field" style="margin-top:16px"><label>Комментарий<textarea id="new-comment" rows="2" maxlength="2000" placeholder="Оставить запись в истории"></textarea></label>'+
-    (state.user.role!=="client"?'<label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="comment-internal"> Внутренний комментарий</label>':"")+
-    '<button class="btn btn-outline" data-comment>Добавить комментарий</button></div>';
-  modal("Заявка #"+short(t.id),desc);
+    '<p class="muted" style="font-size:11px">Часовой пояс: '+safe(t.timezone)+' · Исполнитель: '+safe(t.assignee||"Не назначен")+'</p>'+
+    '<div class="detail-buttons">'+actions.join("")+'</div>'+
+    '<div class="detail-subgrid"><section><h3 class="subheading">Хронология событий <span>'+history.length+'</span></h3>'+
+    '<div class="timeline">'+chronology+'</div></section>'+
+    '<section><h3 class="subheading">Фотографии <span>'+photos.length+'</span></h3>'+gallery+
+    '<h3 class="subheading">Выполненные работы <span>'+logs.length+'</span></h3>'+work+'</section></div>'+
+    '<div class="detail-comment field"><label>Комментарий<textarea id="new-comment" rows="2" maxlength="2000" placeholder="Добавить запись в историю"></textarea></label>'+
+    (state.user.role!=="client"?'<label class="checklist-row"><input type="checkbox" id="comment-internal"> Внутренний комментарий</label>':"")+
+    '<button type="button" class="btn btn-outline" data-comment>Добавить комментарий</button></div>';
+  modal("Заявка #"+short(t.id),body);
 }
+
 async function assignment(){
   const t=state.selected;const candidates=await api("/engineers/suggestions?ticket_id="+t.id);
   state.suggestions=candidates;
@@ -301,29 +324,40 @@ async function actModal(id){
   modal("Акт #"+short(id),body,foot);
 }
 function offlineNotice(){
-  return '<div class="intro-banner"><div><h2>Мобильная работа без сети</h2><p>Задачи сохраняются в устройстве. Черновики отправляются только после подтверждения сервера.</p></div>'+
-  '<button class="btn btn-primary" data-sync>↻ Синхронизировать</button></div>';
+  const offline=!navigator.onLine;
+  return '<div class="intro-banner mobile-banner"><div><span class="mobile-state '+(offline?"offline":"")+'">'+
+  (offline?"● Нет соединения":"● Соединение активно")+'</span>'+
+  '<h2>Мобильная работа без остановок</h2><p>Карточки и черновики сохраняются на устройстве. Сервер подтверждает каждую отправку.</p>'+
+  '<p class="last-sync">Последняя загрузка заданий: '+safe(state.lastCached?date(state.lastCached):"ещё не выполнялась")+'</p></div>'+
+  '<button type="button" class="btn btn-primary" data-sync>↻ Синхронизировать</button></div>';
 }
 async function mobilePage(){
   const local=await dbAll("tasks");state.localTasks=local;
-  let pending=await dbAll("queue");state.queue=pending;
-  const items=local.filter(x=>x.assignee_id===state.user.id && ["assigned","accepted","in_progress","returned"].includes(x.status));
-  let out=pageHead("ПОЛЕВОЙ МОДУЛЬ","Рабочее место инженера","Заявки и чек-листы доступны после загрузки даже без подключения.",
-      '<button class="btn btn-outline" data-sync>↻ Обновить данные</button>')+
-    offlineNotice()+'<div class="stats">'+stat("Доступно на устройстве",items.length,"Загруженные карточки","▤")+
-    stat("В очереди",pending.filter(x=>!x.conflict).length,"Не подтверждены сервером","◷")+
-    stat("Конфликты",pending.filter(x=>x.conflict).length,"Требуют решения","⚠",true)+
-    stat("Сеть",navigator.onLine?"Онлайн":"Офлайн","Локальное сохранение работает","◉")+'</div>';
-  out+='<div class="mobile-grid">'+items.map(t=>'<div class="offline-card"><div class="offline-kicker">'+safe(t.priority)+' / #'+short(t.id)+'</div>'+
-    '<h3>'+safe(t.site)+'</h3><p>'+safe(t.description)+'</p><div>'+status(t.status)+'</div>'+
-    '<button class="btn btn-dark" data-work-ticket="'+safe(t.id)+'">Открыть чек-лист ↗</button></div>').join("")+'</div>';
-  out+=panel("Очередь синхронизации","Локальные UUID не считаются серверными записями",
-    '<div class="panel-body" id="queue-content">'+(pending.length?pending.map(x=>
-      '<div class="queue-row"><div><b>'+short(x.uuid)+'</b><div>'+safe(x.summary||"Запись о работах")+'</div>'+
-      '<small class="'+(x.conflict?"warning":"muted")+'">'+safe(x.conflict||"Ожидает доставки")+'</small></div>'+
-      (x.conflict?'<button class="btn btn-outline" data-review-conflict="'+safe(x.uuid)+'">Разобрать</button>':"")+'</div>').join(""):'<div class="empty">Очередь пуста.</div>')+'</div>');
+  const pending=await dbAll("queue");state.queue=pending;
+  const items=local.filter(x=>x.assignee_id===state.user.id&&["assigned","accepted","in_progress","returned"].includes(x.status));
+  let out=pageHead("ПОЛЕВОЙ МОДУЛЬ","Рабочее место инженера","Офлайн-карточки, чек-листы и подтверждённые сервером действия.",
+    '<button class="btn btn-outline" data-sync>↻ Обновить данные</button>')+
+    offlineNotice()+'<div class="stats">'+stat("Карточки на устройстве",items.length,"Сохранённые задания","▤")+
+    stat("В очереди",pending.filter(x=>!x.conflict).length,"Ещё не доставлены","◷")+
+    stat("Конфликты",pending.filter(x=>x.conflict).length,"Нужна проверка инженера","⚠",true)+
+    stat("Соединение",navigator.onLine?"Онлайн":"Офлайн","Состояние сети устройства","◉")+'</div>';
+  out+='<div class="section-divider"><h2>Мои задания</h2><span>'+items.length+' доступно локально</span></div>';
+  out+='<div class="mobile-grid">'+(items.length?items.map(t=>
+    '<article class="offline-card"><div class="offline-kicker">'+safe(t.priority)+' / #'+short(t.id)+'</div>'+
+    '<h3>'+safe(t.site)+'</h3><p>'+safe(t.description)+'</p>'+
+    '<div class="offline-meta">'+status(t.status)+' <span>'+safe(t.asset)+'</span></div>'+
+    '<button type="button" class="btn btn-dark" data-work-ticket="'+safe(t.id)+'">Открыть чек-лист ↗</button></article>').join(""):
+    '<div class="empty">На этом устройстве нет доступных заданий. Подключитесь к сети и обновите данные.</div>')+'</div>';
+  out+=panel("Очередь синхронизации","Записи остаются на устройстве до подтверждения сервера",
+    '<div class="panel-body" id="queue-content"><p class="sync-progress" id="sync-progress" role="status" aria-live="polite"></p>'+
+    (pending.length?pending.map(x=>
+      '<div class="queue-row"><div><b>#'+short(x.uuid)+'</b><div>'+safe(x.summary||"Запись о работах")+'</div>'+
+      '<small class="'+(x.conflict?"warning":"muted")+'">'+(x.conflict?"Требует проверки: "+safe(x.conflict):"Ожидает отправки")+'</small></div>'+
+      (x.conflict?'<button class="btn btn-outline" data-review-conflict="'+safe(x.uuid)+'">Разобрать ↗</button>':"")+
+      '</div>').join(""):'<div class="empty empty-compact">Очередь пуста. Все действия подтверждены.</div>')+'</div>');
   return out;
 }
+
 async function workTicket(id){
   const t=(await dbAll("tasks")).find(x=>x.id===id);
   if(!t)return toast("Карточка не найдена в локальном хранилище",true);
@@ -474,6 +508,8 @@ async function cacheTasks(){
     try{t.required=(await api("/tickets/"+t.id+"/checklist")).required;}catch{t.required=CHECKS[t.asset_kind]||[];}
     await dbPut("tasks",t);
   }
+  state.lastCached=new Date().toISOString();
+  try{localStorage.setItem("FieldPulseLastCached:"+state.user.id,state.lastCached);}catch{}
 }
 async function sync(){
   if(!navigator.onLine){toast("Нет соединения. Черновики сохранены локально.",true);return;}
@@ -485,6 +521,8 @@ async function sync(){
       if(pending.length){
         let applied=0;
         for(let offset=0;offset<pending.length;offset+=30){
+          const progress=$("#sync-progress");
+          if(progress)progress.textContent="Передача действий: "+(offset+1)+"–"+Math.min(pending.length,offset+30)+" из "+pending.length;
           const batch=pending.slice(offset,offset+30);
           const result=await api("/mobile/sync",{method:"POST",body:{actions:batch.map(({conflict,server_version,server_status,...x})=>x)}});
           for(const r of result.results){
@@ -575,6 +613,7 @@ async function loginSubmit(form){
   const obj=Object.fromEntries(new FormData(form));
   const user=await api("/auth/login",{method:"POST",body:obj});
   state.user=user;sessionStorage.setItem("fieldpulse-current-user",JSON.stringify(user));
+  try{state.lastCached=localStorage.getItem("FieldPulseLastCached:"+user.id)||null;}catch{}
   state.page=user.role==="engineer"?"mobile":"overview";
   viewAuth();if(user.role==="engineer")await migrateLegacy();
   await setPage(state.page);connectEvents();
@@ -592,7 +631,9 @@ async function init(){
   try{state.user=await api("/auth/me");sessionStorage.setItem("fieldpulse-current-user",JSON.stringify(state.user));}
   catch{if(!navigator.onLine){try{state.user=JSON.parse(sessionStorage.getItem("fieldpulse-current-user")||"null");}catch{}}}
   viewAuth();
-  if(state.user){state.page=state.user.role==="engineer"?"mobile":"overview";
+  if(state.user){
+    try{state.lastCached=localStorage.getItem("FieldPulseLastCached:"+state.user.id)||null;}catch{}
+    state.page=state.user.role==="engineer"?"mobile":"overview";
     if(state.user.role==="engineer")await migrateLegacy();
     await setPage(state.page);connectEvents();}
 }
