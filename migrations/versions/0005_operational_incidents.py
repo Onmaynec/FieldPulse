@@ -64,6 +64,10 @@ def upgrade():
     if not has_index("incident_deliveries", "ix_incident_deliveries_next_attempt_at"):
         op.create_index("ix_incident_deliveries_next_attempt_at", "incident_deliveries",
                         ["next_attempt_at"])
+    if not has_index("tickets", "ix_ticket_created_seek"):
+        # Supports newest DESC/DESC via a reverse scan.
+        op.create_index("ix_ticket_created_seek", "tickets",
+                        ["created_at", "id"])
     if not has_table("monitor_cycles"):
         op.create_table(
             "monitor_cycles",
@@ -74,6 +78,8 @@ def upgrade():
 
 
 def downgrade():
+    if has_index("tickets", "ix_ticket_created_seek"):
+        op.drop_index("ix_ticket_created_seek", table_name="tickets")
     for table in ("monitor_cycles", "incident_deliveries", "operational_incidents"):
         if has_table(table):
             op.drop_table(table)

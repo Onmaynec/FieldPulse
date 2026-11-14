@@ -94,7 +94,8 @@ class Ticket(Base):
     closed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=now)
     duplicate_of = Column(String(32), nullable=True)
-    __table_args__ = (Index("ix_ticket_site_kind_time", "site_id", "kind", "created_at"),)
+    __table_args__ = (Index("ix_ticket_site_kind_time", "site_id", "kind", "created_at"),
+                      Index("ix_ticket_created_seek", "created_at", "id"))
 
 class Event(Base):
     __tablename__ = "events"
