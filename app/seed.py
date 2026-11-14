@@ -108,7 +108,7 @@ def seed(db):
         delta = timedelta(minutes=rnd.randint(1, 900))
         status = rnd.choices(
             ["new", "triage", "assigned", "accepted", "in_progress", "approval", "closed"],
-            [8, 9, 15, 14, 22, 10, 22]
+            [5, 5, 5, 5, 5, 5, 70]
         )[0]
         engineer = rnd.choice([e for e in engineers if asset.kind in e.skills])
         t = Ticket(id=uid(), org_id=site.org_id, site_id=site.id, asset_id=asset.id,

@@ -328,9 +328,10 @@ function updateNetwork(){
   $("#network-led").classList.toggle("offline",!navigator.onLine);
   $("#network-label").textContent=navigator.onLine?"Соединение активно":"Нет соединения";
 }
-async function dbOpen(){
+async function dbOpen(databaseName){
+  if(!databaseName&&!state.user?.id)throw new Error("Требуется вход для локального хранилища");
   return new Promise((resolve,reject)=>{
-    const request=indexedDB.open("FieldPulseOfflineV1",1);
+    const request=indexedDB.open(databaseName||("FieldPulseOfflineV2-"+state.user.id),1);
     request.onupgradeneeded=()=>{const db=request.result;db.createObjectStore("tasks",{keyPath:"id"});db.createObjectStore("queue",{keyPath:"uuid"});};
     request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
   });
@@ -345,9 +346,33 @@ async function storeOp(name,mode,op){
 const dbAll=name=>storeOp(name,"readonly",o=>o.getAll());
 const dbPut=(name,value)=>storeOp(name,"readwrite",o=>o.put(value));
 const dbDel=(name,key)=>storeOp(name,"readwrite",o=>o.delete(key));
+async function migrateLegacy(){
+  // Preserve offline work by migrating only records associated with the signed-in engineer.
+  if(state.user?.role!=="engineer"||typeof indexedDB.databases!=="function")return;
+  if(!(await indexedDB.databases()).some(x=>x.name==="FieldPulseOfflineV1"))return;
+  const old=await dbOpen("FieldPulseOfflineV1");
+  function readOld(name,mode,fn){
+    return new Promise((resolve,reject)=>{
+      const tx=old.transaction(name,mode),req=fn(tx.objectStore(name));
+      req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+    });
+  }
+  try{
+    const tasks=await readOld("tasks","readonly",o=>o.getAll());
+    const mine=tasks.filter(t=>t.assignee_id===state.user.id);
+    const authorized=new Set(mine.map(t=>t.id));
+    const queue=(await readOld("queue","readonly",o=>o.getAll())).filter(x=>authorized.has(x.ticket_id));
+    for(const t of mine)await dbPut("tasks",t);
+    for(const x of queue)await dbPut("queue",x);
+    for(const t of mine)await readOld("tasks","readwrite",o=>o.delete(t.id));
+    for(const x of queue)await readOld("queue","readwrite",o=>o.delete(x.uuid));
+  }finally{old.close();}
+}
 async function cacheTasks(){
   if(!navigator.onLine)return;
   const rows=await api("/tickets?limit=500");
+  const allowed=new Set(rows.filter(t=>t.assignee_id===state.user.id).map(t=>t.id));
+  for(const saved of await dbAll("tasks"))if(!allowed.has(saved.id))await dbDel("tasks",saved.id);
   for(const t of rows)if(t.assignee_id===state.user.id){
     try{t.required=(await api("/tickets/"+t.id+"/checklist")).required;}catch{t.required=CHECKS[t.asset_kind]||[];}
     await dbPut("tasks",t);
@@ -441,7 +466,8 @@ async function loginSubmit(form){
   const user=await api("/auth/login",{method:"POST",body:obj});
   state.user=user;sessionStorage.setItem("fieldpulse-current-user",JSON.stringify(user));
   state.page=user.role==="engineer"?"mobile":"overview";
-  viewAuth();await setPage(state.page);connectEvents();
+  viewAuth();if(user.role==="engineer")await migrateLegacy();
+  await setPage(state.page);connectEvents();
   if(user.role==="engineer")await sync();
 }
 async function logout(){
@@ -456,7 +482,9 @@ async function init(){
   try{state.user=await api("/auth/me");sessionStorage.setItem("fieldpulse-current-user",JSON.stringify(state.user));}
   catch{if(!navigator.onLine){try{state.user=JSON.parse(sessionStorage.getItem("fieldpulse-current-user")||"null");}catch{}}}
   viewAuth();
-  if(state.user){state.page=state.user.role==="engineer"?"mobile":"overview";await setPage(state.page);connectEvents();}
+  if(state.user){state.page=state.user.role==="engineer"?"mobile":"overview";
+    if(state.user.role==="engineer")await migrateLegacy();
+    await setPage(state.page);connectEvents();}
 }
 document.addEventListener("click",async event=>{
   const el=event.target.closest("button,[data-ticket]");
