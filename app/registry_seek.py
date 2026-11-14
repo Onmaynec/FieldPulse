@@ -5,6 +5,7 @@ cannot be reused for a different user, search, sort, active flag or page size.
 OFFSET pagination remains supported by the existing /tickets/search endpoint.
 """
 import hashlib
+import hmac
 import json
 from datetime import datetime
 from typing import Literal
@@ -35,6 +36,12 @@ def query_signature(*, q, status, priority, sort, active, page_size):
                "active": active, "page_size": page_size}
     return hashlib.sha256(json.dumps(filters, sort_keys=True,
                                      ensure_ascii=False).encode()).hexdigest()
+
+
+def user_binding(user_id: str) -> str:
+    """Opaque identity binding; raw user ids are never exposed in tokens."""
+    return hmac.new(SESSION_SECRET.encode("utf-8"), user_id.encode("utf-8"),
+                    hashlib.sha256).hexdigest()[:32]
 
 
 def key_for(row, sort):
@@ -94,7 +101,7 @@ def seek_tickets(
         try:
             decoded = SIGNER.loads(cursor, max_age=MAX_CURSOR_AGE)
             if (not isinstance(decoded, dict) or decoded.get("v") != 1 or
-                    decoded.get("u") != user.id or decoded.get("h") != signature):
+                    decoded.get("u") != user_binding(user.id) or decoded.get("h") != signature):
                 raise ValueError("Cursor context mismatch")
             query = query.where(seek_condition(decoded.get("k"), sort))
         except (BadSignature, SignatureExpired, ValueError, TypeError, OverflowError):
@@ -105,7 +112,7 @@ def seek_tickets(
     next_token = None
     if more and shown:
         next_token = SIGNER.dumps({
-            "v": 1, "u": user.id, "h": signature,
+            "v": 1, "u": user_binding(user.id), "h": signature,
             "k": key_for(shown[-1], sort),
         })
     return {

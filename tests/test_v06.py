@@ -86,6 +86,7 @@ def test_cursor_can_reject_wrong_signature_even_with_matching_payload(env):
     signin(client, "a@test.local")
     p = client.get("/api/v1/tickets/seek?page_size=10").json()["next_cursor"]
     payload = SIGNER.loads(p)
+    assert payload["u"] != client.get("/api/v1/auth/me").json()["id"]
     payload["h"] = "different"
     changed = SIGNER.dumps(payload)
     assert client.get("/api/v1/tickets/seek",
