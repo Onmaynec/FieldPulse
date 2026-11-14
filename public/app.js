@@ -741,7 +741,10 @@ async function connectEvents(){
   state.eventStream=stream;
   let last=0;
   stream.addEventListener("board",()=>{const time=Date.now();if(time-last<1100)return;last=time;
-    if(state.page!=="mobile")refresh().catch(()=>{});});
+    // Refresh the registry data only: do not wipe active search focus or
+    // temporarily replace a newly saved personal view with a stale list.
+    if(state.page==="tickets")loadTicketPage().catch(()=>{});
+    else if(state.page!=="mobile")refresh().catch(()=>{});});
 }
 async function loginSubmit(form){
   const obj=Object.fromEntries(new FormData(form));
@@ -866,7 +869,7 @@ document.addEventListener("submit",async event=>{
         name,filters:{q:state.filter,status:state.ticketStatus||null,
           priority:state.ticketPriority||null,sort:state.ticketSort,page_size:state.ticketPageSize}
       }});
-      state.ticketViews.push(result);state.activeViewId=result.id;
+      state.ticketViews=await api("/tickets/views");state.activeViewId=result.id;
       closeModal();$("#content").innerHTML=ticketsPage();toast("Представление сохранено");
       return;
     }
