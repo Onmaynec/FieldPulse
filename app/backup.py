@@ -11,6 +11,7 @@ stopped. PostgreSQL restore and S3 upload cannot be an atomic transaction.
 import argparse
 import hashlib
 import json
+import shutil
 import os
 import subprocess
 import tempfile
@@ -31,6 +32,26 @@ MAX_MEMBER = 1024 * 1024 * 1024  # Abort suspicious, oversized archives.
 
 def digest(blob):
     return hashlib.sha256(blob).hexdigest()
+
+
+def checksum_file(path):
+    hasher = hashlib.sha256()
+    size = 0
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            hasher.update(chunk)
+            size += len(chunk)
+    return {"sha256": hasher.hexdigest(), "bytes": size}
+
+
+def checksum_archive_entry(archive, name):
+    hasher = hashlib.sha256()
+    size = 0
+    with archive.open(name) as src:
+        for chunk in iter(lambda: src.read(1024 * 1024), b""):
+            size += len(chunk)
+            hasher.update(chunk)
+    return {"sha256": hasher.hexdigest(), "bytes": size}
 
 
 def pg_command(program, filename):
@@ -69,23 +90,31 @@ def store_archive(out):
         if staging.exists():
             raise FileExistsError(staging)
         try:
-            with zipfile.ZipFile(staging, "w", compression=zipfile.ZIP_DEFLATED,
-                                 compresslevel=6, allowZip64=True) as z:
-                content = pg.read_bytes()
-                z.writestr("postgres/database.dump", content)
-                names["postgres/database.dump"] = {"sha256": digest(content), "bytes": len(content)}
+            with zipfile.ZipFile(staging, "w", compression=zipfile.ZIP_STORED,
+                                 allowZip64=True) as z:
+                z.write(pg, "postgres/database.dump")
+                names["postgres/database.dump"] = checksum_file(pg)
                 paginator = s3.get_paginator("list_objects_v2")
                 for part in paginator.paginate(Bucket=BUCKET):
                     for item in part.get("Contents", []):
                         key = item["Key"]
                         if not key.startswith("tickets/") or ".." in key.split("/"):
                             raise ValueError("Unexpected object key: " + key)
-                        raw = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read()
                         path = "s3/" + key
                         if path in names:
                             raise ValueError("Duplicate key: " + key)
-                        z.writestr(path, raw)
-                        names[path] = {"sha256": digest(raw), "bytes": len(raw)}
+                        stream = s3.get_object(Bucket=BUCKET, Key=key)["Body"]
+                        hasher = hashlib.sha256()
+                        size = 0
+                        try:
+                            with z.open(path, "w") as dest:
+                                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                                    size += len(chunk)
+                                    hasher.update(chunk)
+                                    dest.write(chunk)
+                        finally:
+                            stream.close()
+                        names[path] = {"sha256": hasher.hexdigest(), "bytes": size}
                 manifest = {
                     "format": FORMAT,
                     "created_at": datetime.now(timezone.utc).isoformat(),
@@ -125,9 +154,9 @@ def verify_archive(path):
                 raise ValueError("Unsafe backup entry")
             if item.filename != "postgres/database.dump" and not item.filename.startswith("s3/tickets/"):
                 raise ValueError("Unexpected backup entry")
-            raw = archive.read(item.filename)
             expected = members[item.filename]
-            if not isinstance(expected, dict) or expected.get("bytes") != len(raw) or expected.get("sha256") != digest(raw):
+            observed = checksum_archive_entry(archive, item.filename)
+            if not isinstance(expected, dict) or expected != observed:
                 raise ValueError("Checksum mismatch: " + item.filename)
         return {"valid": True, "members": len(members),
                 "s3_objects": len(members) - 1, "manifest": manifest}
@@ -148,14 +177,16 @@ def restore_archive(path):
         raise RuntimeError("Restore only to an EMPTY object-storage bucket")
     with tempfile.TemporaryDirectory() as tmp, zipfile.ZipFile(path) as archive:
         dest = Path(tmp) / "database.dump"
-        dest.write_bytes(archive.read("postgres/database.dump"))
+        with archive.open("postgres/database.dump") as src, dest.open("wb") as target:
+            shutil.copyfileobj(src, target, length=1024 * 1024)
         run_pg("pg_restore", dest)
         restored = 0
         for filename in report["manifest"]["members"]:
             if filename.startswith("s3/"):
                 key = filename[3:]
-                s3.put_object(Bucket=BUCKET, Key=key,
-                              Body=archive.read(filename), ContentType="image/jpeg")
+                with archive.open(filename) as obj:
+                    s3.upload_fileobj(obj, BUCKET, key,
+                                      ExtraArgs={"ContentType": "image/jpeg"})
                 restored += 1
     return {"restored_s3_objects": restored,
             "note": "Restore is not atomic across PostgreSQL and S3; verify immediately."}
