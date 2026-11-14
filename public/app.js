@@ -2,8 +2,33 @@
 "use strict";
 const $ = (selector, scope = document) => scope.querySelector(selector);
 const $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(selector));
-const state = {user:null, page:"overview", tickets:[], sites:[], acts:[], report:null, selected:null, timeline:[], suggestions:[], filter:"", ticketStatus:"", ticketPriority:"", ticketSort:"newest", ticketPage:1, ticketPageSize:20, ticketData:{items:[],total:0,page:1,pages:0}, ticketViews:[], activeViewId:"", ticketRequestId:0, ticketMode:"offset", ticketCursors:[], board:null, siteFilter:"", eventStream:null, localTasks:[]};
+const state = {user:null, offlineStorage:null, page:"overview", tickets:[], sites:[], acts:[], report:null, selected:null, timeline:[], suggestions:[], filter:"", ticketStatus:"", ticketPriority:"", ticketSort:"newest", ticketPage:1, ticketPageSize:20, ticketData:{items:[],total:0,page:1,pages:0}, ticketViews:[], activeViewId:"", ticketRequestId:0, ticketMode:"offset", ticketCursors:[], board:null, siteFilter:"", eventStream:null, localTasks:[]};
 const UI_PREFS_KEY = "FieldPulseUIPreferencesV4";
+const OFFLINE_IDENTITY_KEY = "FieldPulseOfflineIdentityV1";
+function rememberOfflineIdentity(user){
+  try{
+    if(user&&user.role==="engineer"){
+      localStorage.setItem(OFFLINE_IDENTITY_KEY,JSON.stringify({id:user.id,name:user.name,role:user.role}));
+    }else localStorage.removeItem(OFFLINE_IDENTITY_KEY);
+  }catch{}
+}
+async function readOfflineStorage(){
+  const storage=navigator.storage;
+  if(!storage||typeof storage.estimate!=="function"){
+    state.offlineStorage={supported:false,persistent:false,usage:0,quota:0};return;
+  }
+  let persistent=false,estimate={};
+  try{persistent=typeof storage.persisted==="function"&&await storage.persisted();}catch{}
+  try{estimate=await storage.estimate();}catch{}
+  state.offlineStorage={supported:true,persistent:Boolean(persistent),
+    usage:Number(estimate.usage||0),quota:Number(estimate.quota||0)};
+}
+async function requestOfflinePersistence(){
+  if(!navigator.storage||typeof navigator.storage.persist!=="function")return false;
+  const granted=await navigator.storage.persist();
+  await readOfflineStorage();
+  return granted;
+}
 const prefs = (() => {try{return JSON.parse(localStorage.getItem(UI_PREFS_KEY)||"{}");}catch{return {};}})();
 const ui = {theme:prefs.theme==="dark"?"dark":"light", density:prefs.density==="compact"?"compact":"comfortable"};
 function savePrefs(){try{localStorage.setItem(UI_PREFS_KEY,JSON.stringify(ui));}catch{}}
@@ -511,14 +536,23 @@ async function actModal(id){
   modal("Акт #"+short(id),body,foot);
 }
 function offlineNotice(){
-  const offline=!navigator.onLine;
-  return '<div class="intro-banner mobile-banner"><div><span class="mobile-state '+(offline?"offline":"")+'">'+
+  const offline=!navigator.onLine,storage=state.offlineStorage||{};
+  const mb=value=>Math.max(0,Number(value||0)/1024/1024).toFixed(1);
+  const storageText=!storage.supported?"Браузер не сообщает состояние локального хранилища":
+    (storage.persistent?"Браузер закрепил локальные данные":"Браузер может очистить локальные данные");
+  const storageButton=storage.supported&&!storage.persistent?
+    '<button type="button" class="btn btn-outline btn-sm" data-persist-storage>Защитить офлайн-данные</button>':
+    '<span class="offline-storage-state">'+safe(storageText)+'</span>';
+  return '<div class="intro-banner mobile-banner"><div><span class="mobile-state '+(offline?'offline':'')+'">'+
   (offline?"● Нет соединения":"● Соединение активно")+'</span>'+
   '<h2>Мобильная работа без остановок</h2><p>Карточки и черновики сохраняются на устройстве. Сервер подтверждает каждую отправку.</p>'+
-  '<p class="last-sync">Последняя загрузка заданий: '+safe(state.lastCached?date(state.lastCached):"ещё не выполнялась")+'</p></div>'+
+  '<p class="last-sync">Последняя загрузка заданий: '+safe(state.lastCached?date(state.lastCached):"ещё не выполнялась")+'</p>'+
+  '<div class="offline-storage"><span>'+safe(storageText)+(storage.quota?' · '+mb(storage.usage)+' / '+mb(storage.quota)+' МиБ':'')+'</span>'+storageButton+'</div>'+
+  '<p class="muted offline-storage-note">Постоянное хранение снижает риск автоматической очистки браузером, но не заменяет резервную копию и защиту самого устройства.</p></div>'+
   '<button type="button" class="btn btn-primary" data-sync>↻ Синхронизировать</button></div>';
 }
 async function mobilePage(){
+  await readOfflineStorage();
   const local=await dbAll("tasks");state.localTasks=local;
   const pending=await dbAll("queue");state.queue=pending;
   const items=local.filter(x=>x.assignee_id===state.user.id&&["assigned","accepted","in_progress","returned"].includes(x.status));
@@ -647,8 +681,12 @@ function updateNetwork(){
 async function dbOpen(databaseName){
   if(!databaseName&&!state.user?.id)throw new Error("Требуется вход для локального хранилища");
   return new Promise((resolve,reject)=>{
-    const request=indexedDB.open(databaseName||("FieldPulseOfflineV2-"+state.user.id),1);
-    request.onupgradeneeded=()=>{const db=request.result;db.createObjectStore("tasks",{keyPath:"id"});db.createObjectStore("queue",{keyPath:"uuid"});};
+    const request=indexedDB.open(databaseName||("FieldPulseOfflineV2-"+state.user.id),2);
+    request.onupgradeneeded=()=>{const db=request.result;
+      if(!db.objectStoreNames.contains("tasks"))db.createObjectStore("tasks",{keyPath:"id"});
+      if(!db.objectStoreNames.contains("queue"))db.createObjectStore("queue",{keyPath:"uuid"});
+      if(!db.objectStoreNames.contains("meta"))db.createObjectStore("meta",{keyPath:"key"});
+    };
     request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
   });
 }
@@ -665,6 +703,16 @@ async function storeOp(name,mode,op){
 const dbAll=name=>storeOp(name,"readonly",o=>o.getAll());
 const dbPut=(name,value)=>storeOp(name,"readwrite",o=>o.put(value));
 const dbDel=(name,key)=>storeOp(name,"readwrite",o=>o.delete(key));
+async function dbReplaceAll(name,values){
+  const db=await dbOpen();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction(name,"readwrite"),store=tx.objectStore(name);
+    store.clear();for(const value of values)store.put(value);
+    tx.oncomplete=()=>{db.close();resolve();};
+    tx.onabort=()=>{db.close();reject(tx.error||new Error("Локальное хранилище не приняло обновление"));};
+    tx.onerror=()=>{};
+  });
+}
 async function migrateLegacy(){
   // Preserve offline work by migrating only records associated with the signed-in engineer.
   if(state.user?.role!=="engineer"||typeof indexedDB.databases!=="function")return;
@@ -702,12 +750,14 @@ async function cacheTasks(){
     if(page>=data.pages)break;
     page++;
   }
-  const allowed=new Set(rows.filter(t=>t.assignee_id===state.user.id).map(t=>t.id));
-  for(const saved of await dbAll("tasks"))if(!allowed.has(saved.id))await dbDel("tasks",saved.id);
+  const cached=[];
   for(const t of rows)if(t.assignee_id===state.user.id){
     try{t.required=(await api("/tickets/"+t.id+"/checklist")).required;}catch{t.required=CHECKS[t.asset_kind]||[];}
-    await dbPut("tasks",t);
+    cached.push(t);
   }
+  // Replace the task cache in one IndexedDB transaction. If quota is exceeded,
+  // the previous complete snapshot survives instead of a half-cleared cache.
+  await dbReplaceAll("tasks",cached);
   state.lastCached=new Date().toISOString();
   try{localStorage.setItem("FieldPulseLastCached:"+state.user.id,state.lastCached);}catch{}
 }
@@ -715,7 +765,10 @@ async function sync(){
   if(!navigator.onLine){toast("Нет соединения. Черновики сохранены локально.",true);return;}
   try{
     if(state.user.role==="engineer"){
-      await cacheTasks();
+      let cacheError=null;
+      try{await cacheTasks();}catch(error){cacheError=error;}
+      // A failed refresh must not block delivery of actions already stored
+      // locally. Those actions are independent of the latest task snapshot.
       const queue=await dbAll("queue");
       const pending=queue.filter(x=>!x.conflict).sort((a,b)=>String(a.client_at).localeCompare(String(b.client_at)));
       if(pending.length){
@@ -724,23 +777,54 @@ async function sync(){
           const progress=$("#sync-progress");
           if(progress)progress.textContent="Передача действий: "+(offset+1)+"–"+Math.min(pending.length,offset+30)+" из "+pending.length;
           const batch=pending.slice(offset,offset+30);
-          const result=await api("/mobile/sync",{method:"POST",body:{actions:batch.map(({conflict,server_version,server_status,...x})=>x)}});
-          for(const r of result.results){
-            const item=batch.find(x=>x.uuid===r.uuid);if(!item)continue;
-            if(["applied","duplicate"].includes(r.status)){
+          for(const item of batch){
+            item.attempts=(item.attempts||0)+1;
+            item.last_attempt_at=new Date().toISOString();
+            item.last_error=null;
+            await dbPut("queue",item);
+          }
+          let result;
+          try{
+            result=await api("/mobile/sync",{method:"POST",body:{actions:batch.map(({conflict,server_version,server_status,attempts,last_attempt_at,last_error,queued_at,...x})=>x)}});
+          }catch(error){
+            for(const item of batch){
+              item.last_error=error.status?"HTTP_"+error.status:"NETWORK_ERROR";
+              await dbPut("queue",item);
+            }
+            throw error;
+          }
+          const received=new Map((result.results||[]).map(row=>[row.uuid,row]));
+          for(const item of batch){
+            const response=received.get(item.uuid);
+            if(!response){
+              item.last_error="INCOMPLETE_RESPONSE";await dbPut("queue",item);continue;
+            }
+            if(["applied","duplicate"].includes(response.status)){
               await dbDel("queue",item.uuid);applied+=1;
             }else{
-              item.conflict=r.reason||r.status;item.server_version=r.server_version;
-              item.server_status=r.server_status;await dbPut("queue",item);
+              item.conflict=response.reason||response.status;
+              item.server_version=response.server_version;
+              item.server_status=response.server_status;
+              item.last_error=null;
+              await dbPut("queue",item);
             }
           }
         }
-        toast("Синхронизация завершена. Подтверждено: "+applied+" из "+pending.length);
-      }else toast(queue.length?"Есть неразобранные конфликты":"Данные задач актуальны");
-      state.tickets=await api("/tickets?limit=500");
+        toast(cacheError?
+          "Очередь передана: "+applied+" из "+pending.length+". Список заданий не обновлён.":
+          "Синхронизация завершена. Подтверждено: "+applied+" из "+pending.length,
+          Boolean(cacheError));
+      }else{
+        toast(cacheError?"Очередь сохранена, но обновить задания не удалось":
+          (queue.length?"Есть неразобранные конфликты":"Данные задач актуальны"),Boolean(cacheError));
+      }
+      if(!cacheError)state.tickets=await api("/tickets?limit=500");
       if(state.page==="mobile")$("#content").innerHTML=await mobilePage();
-    }else {await refresh();}
-  }catch(err){toast("Ошибка синхронизации: "+err.message,true);}
+    }else{await refresh();}
+  }catch(err){
+    toast("Ошибка синхронизации: "+err.message,true);
+    if(state.page==="mobile")$("#content").innerHTML=await mobilePage();
+  }
 }
 async function conflictModal(id){
   const item=(await dbAll("queue")).find(x=>x.uuid===id);if(!item)return;
@@ -833,7 +917,7 @@ async function connectEvents(){
 async function loginSubmit(form){
   const obj=Object.fromEntries(new FormData(form));
   const user=await api("/auth/login",{method:"POST",body:obj});
-  state.user=user;sessionStorage.setItem("fieldpulse-current-user",JSON.stringify(user));
+  state.user=user;sessionStorage.setItem("fieldpulse-current-user",JSON.stringify(user));rememberOfflineIdentity(user);
   try{state.lastCached=localStorage.getItem("FieldPulseLastCached:"+user.id)||null;}catch{}
   state.page=user.role==="engineer"?"mobile":"overview";
   viewAuth();if(user.role==="engineer")await migrateLegacy();
@@ -848,13 +932,17 @@ async function logout(){
   state.ticketSort="newest";state.ticketPage=1;state.ticketPageSize=20;
   state.ticketMode="offset";state.ticketCursors=[];state.board=null;
   sessionStorage.removeItem("fieldpulse-current-user");
+  try{localStorage.removeItem(OFFLINE_IDENTITY_KEY);}catch{}
   closeModal();viewAuth();
 }
 async function init(){
   updateNetwork();
   if("serviceWorker" in navigator)navigator.serviceWorker.register("/sw.js").catch(()=>{});
-  try{state.user=await api("/auth/me");sessionStorage.setItem("fieldpulse-current-user",JSON.stringify(state.user));}
-  catch{if(!navigator.onLine){try{state.user=JSON.parse(sessionStorage.getItem("fieldpulse-current-user")||"null");}catch{}}}
+  try{state.user=await api("/auth/me");sessionStorage.setItem("fieldpulse-current-user",JSON.stringify(state.user));rememberOfflineIdentity(state.user);}
+  catch{if(!navigator.onLine){
+    try{state.user=JSON.parse(localStorage.getItem(OFFLINE_IDENTITY_KEY)||sessionStorage.getItem("fieldpulse-current-user")||"null");}
+    catch{state.user=null;}
+  }}
   viewAuth();
   if(state.user){
     try{state.lastCached=localStorage.getItem("FieldPulseLastCached:"+state.user.id)||null;}catch{}
@@ -934,6 +1022,12 @@ document.addEventListener("click",async event=>{
     if(el.matches("[data-demo]")){$("#login-form [name=email]").value=el.dataset.demo;$("#login-form [name=password]").value="FieldPulseDemo!2026";return;}
     if(el.matches("[data-ticket]")){await details(el.dataset.ticket);return;}
     if(el.matches("[data-act]")){await actModal(el.dataset.act);return;}
+    if(el.matches("[data-persist-storage]")){
+      const granted=await requestOfflinePersistence();
+      if(state.page==="mobile")$("#content").innerHTML=await mobilePage();
+      toast(granted?"Браузер разрешил постоянное хранение локальных данных":
+        "Браузер не гарантирует сохранность локальных данных",!granted);return;
+    }
     if(el.matches("[data-sync]")){await sync();return;}
     if(el.matches("[data-work-ticket]")){await workTicket(el.dataset.workTicket);return;}
     if(el.matches("[data-review-conflict]")){await conflictModal(el.dataset.reviewConflict);return;}
@@ -1054,7 +1148,8 @@ document.addEventListener("submit",async event=>{
       const photos=await Promise.all(files.map(async f=>({name:f.name,data:await fileBase64(f)})));
       const checks={};for(const x of data.getAll("check"))checks[x]=true;
       const action={uuid:crypto.randomUUID(),ticket_id:form.dataset.id,base_version:Number(form.dataset.version),
-        client_at:new Date().toISOString(),summary:String(data.get("summary")||""),checklist:checks,materials,photos};
+        client_at:new Date().toISOString(),queued_at:new Date().toISOString(),attempts:0,last_attempt_at:null,last_error:null,
+        summary:String(data.get("summary")||""),checklist:checks,materials,photos};
       await dbPut("queue",action);closeModal();toast("Черновик сохранён на устройстве");
       if(navigator.onLine)await sync();else $("#content").innerHTML=await mobilePage();
     }

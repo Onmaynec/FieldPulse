@@ -394,3 +394,9 @@ input[type=file]::file-selector-button{background:var(--soft-accent);color:var(-
 .incident-entry-title{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
 .incident-entry-title>b{font-size:11px;color:var(--sub)}
 @media(max-width:520px){.incident-entry{flex-wrap:wrap}.incident-entry .btn{width:100%}}
+
+
+/* v0.8: explicit browser-storage status for long offline sessions */
+.offline-storage{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;font-size:11px;color:var(--sub)}
+.offline-storage-state{font-weight:700;color:var(--green)}
+.offline-storage-note{font-size:10px;line-height:1.5;margin-top:6px;max-width:640px}
