@@ -306,3 +306,18 @@ input[type=file]::file-selector-button{background:var(--soft-accent);color:var(-
 .topbar-right .icon-button{font-size:23px}
 @media(max-width:800px){.detail-subgrid{grid-template-columns:1fr;gap:0}.detail-subgrid>section:first-child{border:0;padding:0}.sidebar-backdrop:not([hidden]){display:block}}
 @media(max-width:480px){.photo-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.table-toolbar .toolbar-actions{flex-wrap:wrap}.table-toolbar .result-count{font-size:10px}}
+
+/* Operational dashboard 0.4 */
+.watchlist{padding:2px 17px 16px}
+.watchlist-row{width:100%;display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:15px 9px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--ink);text-align:left;border-radius:5px}
+.watchlist-row:last-child{border-bottom:0}
+.watchlist-row:hover{background:var(--surface-alt)}
+.watchlist-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.watchlist-head b{font-variant-numeric:tabular-nums;font-size:12px;letter-spacing:.25px}
+.watchlist-description{font-weight:700;font-size:12px;line-height:1.5}
+.watchlist-date{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:11px;color:var(--muted)}
+.watchlist-date .sla-state{font-size:10px}
+.activity-total{float:right;color:var(--muted);font-variant-numeric:tabular-nums;font-weight:800}
+.intro-banner .eyebrow{font-size:10px;color:#aebaff}
+.intro-banner:has(.eyebrow) h2{margin-top:8px}
+@media(max-width:480px){.watchlist{padding:0 10px 12px}.watchlist-row{padding:14px 8px}}
