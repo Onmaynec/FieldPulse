@@ -39,6 +39,8 @@ def percentile(values, fraction):
 
 def call(browser, method, path, payload=None, kind="json"):
     headers = {}
+    if method == "POST" and path == "/tickets":
+        headers["Idempotency-Key"] = uuid.uuid4().hex
     body = None
     if kind == "json" and payload is not None:
         body = json.dumps(payload).encode()
