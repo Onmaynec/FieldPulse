@@ -1,5 +1,7 @@
 """Offline action replay: each UUID is processed once, conflicts are explicit and preserved."""
 import base64
+import hashlib
+import math
 import binascii
 import io
 import json
@@ -47,19 +49,27 @@ class Batch(BaseModel):
 def sync(batch: Batch, user: User = Depends(roles("engineer")),
          db: Session = Depends(get_db)):
     results = []
+    advanced = {}  # Track only versions applied in THIS batch; never silently rebase remote edits.
     for action in batch.actions:
         key = str(action.uuid)
+        fingerprint = hashlib.sha256(action.model_dump_json(exclude={"uuid"}).encode()).hexdigest()
         previous = db.scalar(select(Worklog).where(
             Worklog.engineer_id == user.id, Worklog.action_uuid == key))
         if previous:
-            results.append({"uuid": key, "status": "duplicate", "worklog_id": previous.id,
-                            "server_at": fmt(previous.server_at)})
+            if previous.request_hash is not None and previous.request_hash != fingerprint:
+                results.append({"uuid": key, "status": "conflict", "reason": "UUID_REUSED_WITH_DIFFERENT_PAYLOAD"})
+            else:
+                results.append({"uuid": key, "status": "duplicate", "worklog_id": previous.id,
+                                "server_at": fmt(previous.server_at)})
             continue
         t = db.scalar(select(Ticket).where(Ticket.id == action.ticket_id).with_for_update())
         if not t or t.assignee_id != user.id:
             results.append({"uuid": key, "status": "conflict", "reason": "NOT_ASSIGNED"})
             continue
-        if t.version != action.base_version or t.status not in ("accepted", "in_progress", "returned"):
+        chain = advanced.get(t.id)
+        sequential = (chain is not None and chain["base"] == action.base_version
+                      and chain["version"] == t.version)
+        if (t.version != action.base_version and not sequential) or t.status not in ("accepted", "in_progress", "returned"):
             results.append({"uuid": key, "status": "conflict", "reason": "VERSION_OR_STATUS",
                             "server_version": t.version, "server_status": t.status})
             continue
@@ -67,8 +77,9 @@ def sync(batch: Batch, user: User = Depends(roles("engineer")),
         if not set(action.checklist).issubset(required):
             results.append({"uuid": key, "status": "invalid", "reason": "UNKNOWN_CHECKLIST_ITEM"})
             continue
-        if any(not isinstance(m.get("name"), str) or not isinstance(m.get("quantity"), (int, float))
-               or m["quantity"] < 0 for m in action.materials):
+        if any(not isinstance(m.get("name"), str) or not m["name"].strip() or len(m["name"]) > 150
+               or type(m.get("quantity")) not in (int, float)
+               or not math.isfinite(m["quantity"]) or m["quantity"] < 0 for m in action.materials):
             results.append({"uuid": key, "status": "invalid", "reason": "INVALID_MATERIAL"})
             continue
         try:
@@ -80,7 +91,7 @@ def sync(batch: Batch, user: User = Depends(roles("engineer")),
             continue
         try:
             w = Worklog(ticket_id=t.id, engineer_id=user.id, action_uuid=key,
-                        summary=action.summary, checklist=action.checklist,
+                        request_hash=fingerprint, summary=action.summary, checklist=action.checklist,
                         materials=action.materials, client_at=action.client_at, server_at=now())
             db.add(w)
             db.flush()
@@ -93,6 +104,7 @@ def sync(batch: Batch, user: User = Depends(roles("engineer")),
                   "server_at": fmt(w.server_at), "photo_count": len(decoded)},
                  key="sync:" + user.id + ":" + key)
             db.commit()
+            advanced[t.id] = {"base": action.base_version, "version": t.version}
             results.append({"uuid": key, "status": "applied", "worklog_id": w.id,
                             "server_at": fmt(w.server_at), "server_version": t.version})
         except Exception:
