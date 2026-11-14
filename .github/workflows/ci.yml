@@ -55,6 +55,7 @@ jobs:
           python -m pip install playwright==1.56.0 Pillow==11.1.0
           python -m playwright install --with-deps chromium
           python scripts/browser_e2e.py
+          python scripts/visual_e2e.py
           docker compose exec -T api python -m app.backup create /tmp/fieldpulse-ci-backup.zip
           docker compose exec -T api python -m app.backup verify /tmp/fieldpulse-ci-backup.zip
           docker compose exec -T api python -m app.maintenance --limit 10
@@ -74,6 +75,13 @@ jobs:
           path: |
             fieldpulse-load.json
             fieldpulse-load-target.json
+          if-no-files-found: ignore
+      - name: Store v0.4 visual screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fieldpulse-v04-ui-screenshots
+          path: visual-artifacts/*.png
           if-no-files-found: ignore
       - name: Show logs on error
         if: failure()
