@@ -122,12 +122,14 @@ jobs:
             .recovery/fieldpulse-backup.zip
             .recovery/fieldpulse-backup-truncated.zip
           if-no-files-found: warn
+      - name: Show logs on error
+        if: failure()
+        run: |
+          docker compose logs --tail 150 || true
+          docker compose -p fieldpulse-recovery --profile recovery logs --tail 120 || true
       - name: Cleanup isolated recovery stack
         if: always()
         run: docker compose -p fieldpulse-recovery --profile recovery down -v --remove-orphans
-      - name: Show logs on error
-        if: failure()
-        run: docker compose logs --tail 150
       - name: Shutdown
         if: always()
         run: docker compose down -v
