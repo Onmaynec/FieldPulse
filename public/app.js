@@ -10,8 +10,8 @@ function savePrefs(){try{localStorage.setItem(UI_PREFS_KEY,JSON.stringify(ui));}
 function applyAppearance(){
   document.documentElement.dataset.theme=ui.theme;
   document.documentElement.classList.toggle("density-compact",ui.density==="compact");
-  $("[data-theme]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.theme===ui.theme)));
-  $("[data-density]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.density===ui.density)));
+  document.querySelectorAll("[data-theme]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.theme===ui.theme)));
+  document.querySelectorAll("[data-density]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.density===ui.density)));
 }
 const ICON_PATH = {
  overview:'<rect x="3" y="3" width="7" height="9" rx="1.4"/><rect x="14" y="3" width="7" height="5" rx="1.4"/><rect x="14" y="12" width="7" height="9" rx="1.4"/><rect x="3" y="16" width="7" height="5" rx="1.4"/>',
