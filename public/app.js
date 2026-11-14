@@ -2,7 +2,7 @@
 "use strict";
 const $ = (selector, scope = document) => scope.querySelector(selector);
 const $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(selector));
-const state = {user:null, page:"overview", tickets:[], sites:[], acts:[], report:null, selected:null, timeline:[], suggestions:[], filter:"", ticketStatus:"", ticketPriority:"", ticketSort:"newest", ticketPage:1, ticketPageSize:20, siteFilter:"", eventStream:null, localTasks:[]};
+const state = {user:null, page:"overview", tickets:[], sites:[], acts:[], report:null, selected:null, timeline:[], suggestions:[], filter:"", ticketStatus:"", ticketPriority:"", ticketSort:"newest", ticketPage:1, ticketPageSize:20, ticketData:{items:[],total:0,page:1,pages:0}, ticketViews:[], activeViewId:"", ticketRequestId:0, siteFilter:"", eventStream:null, localTasks:[]};
 const UI_PREFS_KEY = "FieldPulseUIPreferencesV4";
 const prefs = (() => {try{return JSON.parse(localStorage.getItem(UI_PREFS_KEY)||"{}");}catch{return {};}})();
 const ui = {theme:prefs.theme==="dark"?"dark":"light", density:prefs.density==="compact"?"compact":"comfortable"};
@@ -125,44 +125,67 @@ function overview(){
     '<div class="layout-two">'+recent+watchlist+'</div>'+distribution;
 }
 
-function filteredTickets(){
-  const match=state.filter.trim().toLocaleLowerCase("ru");
-  const filtered=state.tickets.filter(t=>
-    (!match||[t.id,t.site,t.asset,t.description,t.assignee||""].some(x=>String(x||"").toLocaleLowerCase("ru").includes(match)))&&
-    (!state.ticketStatus||t.status===state.ticketStatus)&&
-    (!state.ticketPriority||t.priority===state.ticketPriority));
-  const p={P1:1,P2:2,P3:3,P4:4};
-  return filtered.sort((a,b)=>{
-    if(state.ticketSort==="priority")return (p[a.priority]||9)-(p[b.priority]||9)||new Date(a.resolution_deadline)-new Date(b.resolution_deadline);
-    if(state.ticketSort==="deadline")return new Date(a.resolution_deadline||"9999-01-01")-new Date(b.resolution_deadline||"9999-01-01");
-    return new Date(b.created_at)-new Date(a.created_at);
+function ticketQuery(){
+  const q=new URLSearchParams({
+    page:String(state.ticketPage),page_size:String(state.ticketPageSize),
+    sort:state.ticketSort
   });
+  if(state.filter.trim())q.set("q",state.filter.trim());
+  if(state.ticketStatus)q.set("status",state.ticketStatus);
+  if(state.ticketPriority)q.set("priority",state.ticketPriority);
+  return "/tickets/search?"+q.toString();
+}
+async function loadTicketPage(){
+  const token=++state.ticketRequestId;
+  const data=await api(ticketQuery());
+  if(token!==state.ticketRequestId)return;
+  state.ticketData=data;
+  if(state.page==="tickets")updateTicketResults();
 }
 function ticketResults(){
-  const all=filteredTickets(),total=all.length;
-  const pages=Math.max(1,Math.ceil(total/state.ticketPageSize));
-  state.ticketPage=Math.max(1,Math.min(pages,state.ticketPage));
+  const data=state.ticketData||{items:[],total:0,pages:0};
+  const total=data.total||0;
+  const pages=Math.max(1,data.pages||1);
   const from=(state.ticketPage-1)*state.ticketPageSize;
-  const page=all.slice(from,from+state.ticketPageSize);
-  const toolbar='<div class="table-toolbar"><div class="table-group"><span class="result-count">'+(total?from+1:0)+'–'+Math.min(total,from+state.ticketPageSize)+' из '+total+' загруженных</span>'+
-    '<span class="muted">· до 500 заявок в выдаче API</span></div><div class="toolbar-actions">'+
+  const toolbar='<div class="table-toolbar"><div class="table-group"><span class="result-count">'+
+    (total?from+1:0)+'–'+Math.min(total,from+state.ticketPageSize)+' из '+total+' во всей доступной выборке</span>'+
+    '<span class="muted">· страницы запрашиваются с сервера</span></div><div class="toolbar-actions">'+
     '<button type="button" class="btn btn-ghost" data-density="comfortable" aria-pressed="'+(ui.density==="comfortable")+'" title="Обычная плотность">Обычно</button>'+
     '<button type="button" class="btn btn-ghost" data-density="compact" aria-pressed="'+(ui.density==="compact")+'" title="Компактная таблица">Плотно</button>'+
-    '<button type="button" class="btn btn-outline" data-ticket-page="'+(state.ticketPage-1)+'" '+(state.ticketPage===1?"disabled":"")+' aria-label="Предыдущая страница">‹</button>'+
+    '<button type="button" class="btn btn-outline" data-ticket-page="'+(state.ticketPage-1)+'" '+(state.ticketPage<=1?"disabled":"")+' aria-label="Предыдущая страница">‹</button>'+
     '<span class="result-count">'+state.ticketPage+' / '+pages+'</span>'+
-    '<button type="button" class="btn btn-outline" data-ticket-page="'+(state.ticketPage+1)+'" '+(state.ticketPage===pages?"disabled":"")+' aria-label="Следующая страница">›</button></div></div>';
-  return table(page)+toolbar;
+    '<button type="button" class="btn btn-outline" data-ticket-page="'+(state.ticketPage+1)+'" '+(state.ticketPage>=pages?"disabled":"")+' aria-label="Следующая страница">›</button></div></div>';
+  return table(data.items||[])+toolbar;
 }
 function updateTicketResults(){
   const element=$("#ticket-table");if(!element)return;
   element.innerHTML=ticketResults();
-  const count=$("#ticket-result-count");if(count)count.textContent=filteredTickets().length+" найдено";
+  const count=$("#ticket-result-count");if(count)count.textContent=(state.ticketData?.total||0)+" найдено";
   applyAppearance();
 }
+async function changeTicketQuery(){
+  state.ticketPage=1;state.activeViewId="";
+  const chips=$(".saved-views");if(chips)chips.outerHTML=viewOptions();
+  const box=$("#ticket-table");if(box)box.innerHTML='<div class="registry-loading" role="status">Загрузка отфильтрованных заявок…</div>';
+  try{await loadTicketPage();}
+  catch(err){
+    const current=$("#ticket-table");if(current)current.innerHTML='<div class="empty">Не удалось загрузить заявки. Измените фильтр или попробуйте снова.</div>';
+    toast(err.message,true);
+  }
+}
+function viewOptions(){
+  return '<div class="saved-views"><span>Представления:</span>'+
+    '<button type="button" class="view-chip '+(!state.activeViewId?"selected":"")+'" data-ticket-view="">Все заявки</button>'+
+    (state.ticketViews||[]).map(view=>
+      '<div class="view-chip-group"><button type="button" class="view-chip '+(view.id===state.activeViewId?"selected":"")+
+      '" data-ticket-view="'+safe(view.id)+'">'+safe(view.name)+'</button>'+
+      '<button type="button" class="view-chip-delete" data-delete-ticket-view="'+safe(view.id)+'" aria-label="Удалить представление '+safe(view.name)+'" title="Удалить">×</button></div>').join("")+
+    '<button type="button" class="btn btn-outline btn-sm" data-save-ticket-view>＋ Сохранить фильтры</button></div>';
+}
 function ticketsPage(){
-  return pageHead("УПРАВЛЕНИЕ ЗАЯВКАМИ","Реестр обращений","Поиск, актуальные сроки и действия по доступным вашей роли заявкам.",
+  return pageHead("УПРАВЛЕНИЕ ЗАЯВКАМИ","Реестр обращений","Полный поиск и фильтрация по доступным заявкам — без ограничения в 500 записей.",
     state.user.role==="engineer"?"":'<button class="btn btn-primary" data-create-ticket>＋ Создать заявку</button>')+
-    '<div class="panel"><div class="filters"><input class="search" id="ticket-search" type="search" aria-label="Поиск заявок" placeholder="Номер, объект, оборудование, описание" value="'+safe(state.filter)+'">'+
+    '<div class="panel"><div class="filters"><input class="search" id="ticket-search" type="search" maxlength="100" aria-label="Поиск заявок" placeholder="Номер, объект, оборудование, описание" value="'+safe(state.filter)+'">'+
     '<select id="ticket-status-filter" aria-label="Статус заявки"><option value="">Все статусы</option>'+Object.keys(STATUS).map(s=>
     '<option value="'+s+'" '+(s===state.ticketStatus?"selected":"")+'>'+STATUS[s]+'</option>').join("")+'</select>'+
     '<select id="ticket-priority-filter" aria-label="Приоритет"><option value="">Все приоритеты</option>'+["P1","P2","P3","P4"].map(s=>
@@ -170,8 +193,32 @@ function ticketsPage(){
     '<select id="ticket-sort" aria-label="Порядок сортировки">'+[
     ["newest","Сначала новые"],["deadline","Ближайший SLA"],["priority","Сначала P1"]
     ].map(([value,label])=>'<option value="'+value+'" '+(state.ticketSort===value?"selected":"")+'>'+label+'</option>').join("")+'</select>'+
-    '<span id="ticket-result-count" class="result-count">'+filteredTickets().length+' найдено</span></div>'+
+    '<select id="ticket-page-size" aria-label="Записей на странице">'+[20,50,100].map(n=>
+    '<option value="'+n+'" '+(state.ticketPageSize===n?"selected":"")+'>'+n+' на странице</option>').join("")+'</select>'+
+    '<span id="ticket-result-count" class="result-count">'+(state.ticketData?.total||0)+' найдено</span></div>'+
+    viewOptions()+
     '<div id="ticket-table">'+ticketResults()+'</div></div>';
+}
+async function openSaveTicketView(){
+  if((state.ticketViews||[]).length>=12)return toast("Не более 12 представлений",true);
+  modal("Сохранить представление",'<form id="ticket-view-form" class="form-stack">'+
+    '<label>Название фильтра<input name="name" maxlength="60" minlength="1" required placeholder="Например, просроченные P1"></label>'+
+    '<p class="muted">В аккаунте сохраняются поиск, статус, приоритет, сортировка и размер страницы. Настройки доступны только вам.</p>'+
+    '<button class="btn btn-primary btn-wide" type="submit">Сохранить параметры</button></form>');
+}
+async function applyTicketView(id){
+  const selected=(state.ticketViews||[]).find(view=>view.id===id);
+  if(!selected&&id)return toast("Представление не найдено",true);
+  const filters=selected?.filters||{};
+  state.activeViewId=id;
+  state.filter=filters.q||"";
+  state.ticketStatus=filters.status||"";
+  state.ticketPriority=filters.priority||"";
+  state.ticketSort=filters.sort||"newest";
+  state.ticketPageSize=Number(filters.page_size||20);
+  state.ticketPage=1;
+  const content=$("#content");if(content)content.innerHTML=ticketsPage();
+  try{await loadTicketPage();}catch(err){toast(err.message,true);}
 }
 
 function siteCards(){
@@ -233,7 +280,15 @@ function reportsPage(){
     panel("SLA по объектам","Список приоритетных объектов с нарушениями",'<div class="table-wrap"><table class="table"><thead><tr><th>ОБЪЕКТ</th><th>ЗАЯВКИ</th><th>НАРУШЕНИЯ</th><th>РЕАКЦИЯ P95</th></tr></thead><tbody>'+
       sites.map(s=>'<tr><td>'+safe(s.site)+'</td><td>'+s.total+'</td><td>'+s.breach_count+' ('+s.breach_percent+'%)</td><td>'+safe(s.reaction_p95_minutes??"—")+' мин</td></tr>').join("")+'</tbody></table></div>')+
     panel("Операционное состояние","Исторические события и локальный mock inbox",'<div class="panel-body"><div class="activity">'+
-      [["Активные паузы SLA",ops.active_sla_pauses],["Незавершённые заявки",ops.open_tickets],["Зарегистрированные нарушения",ops.recorded_breach_events],["Сообщения без внешней доставки",ops.pending_mock_notifications]].map(x=>
+      [["Активные паузы SLA",ops.active_sla_pauses],
+       ["Незавершённые заявки",ops.open_tickets],
+       ["Без назначенного инженера",ops.unassigned_open_tickets],
+       ["Активные заявки P1",ops.open_p1_tickets],
+       ["Зарегистрированные нарушения",ops.recorded_breach_events],
+       ["Сообщения без внешней доставки",ops.pending_mock_notifications],
+       ["Возраст самой старой записи mock inbox",ops.oldest_pending_mock_age_seconds==null?"Очередь пуста":ops.oldest_pending_mock_age_seconds+" сек"],
+       ["Последнее зафиксированное событие",ops.last_event_at?date(ops.last_event_at):"Нет событий"]
+      ].map(x=>
       '<div class="activity-item"><span class="activity-dot">◉</span><div><b>'+x[0]+'</b><small>'+safe(x[1]??"—")+'</small></div></div>').join("")+'</div></div>');
 }
 function inboxPage(){
@@ -556,7 +611,16 @@ async function migrateLegacy(){
 }
 async function cacheTasks(){
   if(!navigator.onLine)return;
-  const rows=await api("/tickets?limit=500");
+  // Read the entire active engineer scope, not only the first 500 global tickets.
+  // Do not modify the local cache until all pages have been fetched successfully.
+  const rows=[];
+  let page=1;
+  while(true){
+    const data=await api("/tickets/search?active=true&page_size=100&page="+page);
+    rows.push(...data.items);
+    if(page>=data.pages)break;
+    page++;
+  }
   const allowed=new Set(rows.filter(t=>t.assignee_id===state.user.id).map(t=>t.id));
   for(const saved of await dbAll("tasks"))if(!allowed.has(saved.id))await dbDel("tasks",saved.id);
   for(const t of rows)if(t.assignee_id===state.user.id){
@@ -615,8 +679,16 @@ async function fileBase64(file){
 async function refresh(){
   try{
     const role=state.user.role;
-    const results=await Promise.all([api("/tickets?limit=500"),api("/sites")]);
-    state.tickets=results[0];state.sites=results[1];
+    const listing=state.page==="tickets";
+    const [sites,tickets]=await Promise.all([
+      api("/sites"),listing?Promise.resolve(null):api("/tickets?limit=500")
+    ]);
+    state.sites=sites;
+    if(!listing)state.tickets=tickets;
+    else {
+      const [result,views]=await Promise.all([api(ticketQuery()),api("/tickets/views")]);
+      state.ticketData=result;state.ticketViews=views;
+    }
     if(["admin","dispatcher","manager"].includes(role)){
       state.report=await api("/reports/overview");
       if(state.page==="inbox")state.notifications=await api("/notifications");
@@ -647,7 +719,7 @@ async function setPage(page){
       '<div class="skeleton-grid"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div>'+
       '<div class="skeleton skeleton-card"></div></div></div>';
   }
-  state.page=page;state.filter="";
+  state.page=page;
   setIdentity();
   if(page==="mobile"){try{$("#content").innerHTML=await mobilePage();}catch(err){toast(err.message,true);}}
   else {await refresh();}
@@ -669,7 +741,10 @@ async function connectEvents(){
   state.eventStream=stream;
   let last=0;
   stream.addEventListener("board",()=>{const time=Date.now();if(time-last<1100)return;last=time;
-    if(state.page!=="mobile")refresh().catch(()=>{});});
+    // Refresh the registry data only: do not wipe active search focus or
+    // temporarily replace a newly saved personal view with a stale list.
+    if(state.page==="tickets")loadTicketPage().catch(()=>{});
+    else if(state.page!=="mobile")refresh().catch(()=>{});});
 }
 async function loginSubmit(form){
   const obj=Object.fromEntries(new FormData(form));
@@ -684,7 +759,10 @@ async function loginSubmit(form){
 async function logout(){
   try{await api("/auth/logout",{method:"POST"});}catch{}
   if(state.eventStream)state.eventStream.close();
-  state.user=null;sessionStorage.removeItem("fieldpulse-current-user");
+  state.user=null;state.ticketViews=[];state.activeViewId="";
+  state.filter="";state.ticketStatus="";state.ticketPriority="";
+  state.ticketSort="newest";state.ticketPage=1;state.ticketPageSize=20;
+  sessionStorage.removeItem("fieldpulse-current-user");
   closeModal();viewAuth();
 }
 async function init(){
@@ -711,7 +789,19 @@ document.addEventListener("click",async event=>{
       ui.density=el.dataset.density;savePrefs();applyAppearance();return;
     }
     if(el.matches("[data-ticket-page]")){
-      state.ticketPage=Number(el.dataset.ticketPage);updateTicketResults();return;
+      const previous=state.ticketPage;state.ticketPage=Number(el.dataset.ticketPage);
+      try{await loadTicketPage();}catch(err){state.ticketPage=previous;toast(err.message,true);}
+      return;
+    }
+    if(el.matches("[data-save-ticket-view]")){await openSaveTicketView();return;}
+    if(el.matches("[data-ticket-view]")){await applyTicketView(el.dataset.ticketView);return;}
+    if(el.matches("[data-delete-ticket-view]")){
+      const id=el.dataset.deleteTicketView;
+      if(!confirm("Удалить сохранённое представление?"))return;
+      await api("/tickets/views/"+encodeURIComponent(id),{method:"DELETE"});
+      state.ticketViews=state.ticketViews.filter(view=>view.id!==id);
+      if(state.activeViewId===id){state.activeViewId="";state.ticketPage=1;await loadTicketPage();}
+      $("#content").innerHTML=ticketsPage();toast("Представление удалено");return;
     }
     if(el.matches("[data-close]")){closeModal();return;}
     if(el.matches("[data-create-ticket]")){await createTicketModal();return;}
@@ -768,10 +858,21 @@ document.addEventListener("click",async event=>{
 });
 document.addEventListener("submit",async event=>{
   const form=event.target;
-  if(!["login-form","create-ticket-form","work-form","admin-import-form","admin-policy-form","admin-profile-form","admin-shift-form"].includes(form.id))return;
+  if(!["login-form","create-ticket-form","work-form","admin-import-form","admin-policy-form","admin-profile-form","admin-shift-form","ticket-view-form"].includes(form.id))return;
   event.preventDefault();
   try{
     if(form.id==="login-form"){await loginSubmit(form);return;}
+    if(form.id==="ticket-view-form"){
+      const name=String(new FormData(form).get("name")||"").trim();
+      if(!name)throw new Error("Укажите название");
+      const result=await api("/tickets/views",{method:"POST",body:{
+        name,filters:{q:state.filter,status:state.ticketStatus||null,
+          priority:state.ticketPriority||null,sort:state.ticketSort,page_size:state.ticketPageSize}
+      }});
+      state.ticketViews=await api("/tickets/views");state.activeViewId=result.id;
+      closeModal();$("#content").innerHTML=ticketsPage();toast("Представление сохранено");
+      return;
+    }
     if(form.id==="admin-import-form"){
       const fd=new FormData();fd.append("file",form.elements.file.files[0]);
       const kind=form.elements.kind.value;
@@ -846,12 +947,17 @@ document.addEventListener("change",e=>{
   }
   if(e.target.id==="admin-site-select")state.adminSite=e.target.value;
   if(e.target.id==="new-site")loadAssets();
-  if(e.target.id==="ticket-status-filter"){state.ticketStatus=e.target.value;state.ticketPage=1;updateTicketResults();}
-  if(e.target.id==="ticket-priority-filter"){state.ticketPriority=e.target.value;state.ticketPage=1;updateTicketResults();}
-  if(e.target.id==="ticket-sort"){state.ticketSort=e.target.value;state.ticketPage=1;updateTicketResults();}
+  if(e.target.id==="ticket-status-filter"){state.ticketStatus=e.target.value;changeTicketQuery();}
+  if(e.target.id==="ticket-priority-filter"){state.ticketPriority=e.target.value;changeTicketQuery();}
+  if(e.target.id==="ticket-sort"){state.ticketSort=e.target.value;changeTicketQuery();}
+  if(e.target.id==="ticket-page-size"){state.ticketPageSize=Number(e.target.value);changeTicketQuery();}
 });
 document.addEventListener("input",e=>{
-  if(e.target.id==="ticket-search"){state.filter=e.target.value;state.ticketPage=1;updateTicketResults();}
+  if(e.target.id==="ticket-search"){
+    state.filter=e.target.value;
+    clearTimeout(window.ticketSearchTimer);
+    window.ticketSearchTimer=setTimeout(()=>changeTicketQuery(),250);
+  }
   if(e.target.id==="site-search"){
     state.siteFilter=e.target.value;
     const siteGrid=$("#site-grid");if(siteGrid)siteGrid.innerHTML=siteCards();

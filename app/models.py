@@ -198,3 +198,13 @@ class AdminAudit(Base):
     target = Column(String(160), nullable=False)
     data = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), nullable=False, default=now)
+
+class TicketView(Base):
+    """Per-user saved filters; never used as an authorization boundary."""
+    __tablename__ = "ticket_views"
+    id = pk()
+    user_id = Column(String(32), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(60), nullable=False)
+    filters = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=now)
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_ticket_view_user_name"),)

@@ -8,14 +8,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, Field
-from sqlalchemy import func, select, text
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import func, or_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .db import get_db
 from .models import (
     Act, Asset, Attachment, AuthAttempt, BoardEvent, Contract, Event, Idempotency, Organization,
-    Outbox, Pause, Shift, Site, SLAPolicy, Ticket, User, Worklog, now
+    Outbox, Pause, Shift, Site, SLAPolicy, Ticket, TicketView, User, Worklog, now
 )
 from .security import (
     access_site, access_ticket, current_user, roles, signer, hash_password,
@@ -203,6 +204,114 @@ def tickets(status: str | None = None, limit: int = Query(100, ge=1, le=500),
     if status:
         q = q.where(Ticket.status == status)
     return [serialize_ticket(db, t) for t in db.scalars(q)]
+
+# Server-filtered registry; the legacy /tickets list stays for the PWA and other clients.
+STATUS_FILTER = Literal["new", "triage", "assigned", "accepted", "in_progress",
+                        "approval", "returned", "closed", "cancelled"]
+SORT_FILTER = Literal["newest", "deadline", "priority"]
+
+class SavedTicketFilters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    q: str = Field(default="", max_length=100)
+    status: STATUS_FILTER | None = None
+    priority: Literal["P1", "P2", "P3", "P4"] | None = None
+    sort: SORT_FILTER = "newest"
+    page_size: int = Field(default=20, ge=10, le=100)
+
+class TicketViewInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=60)
+    filters: SavedTicketFilters
+
+def view_json(view):
+    return {"id": view.id, "name": view.name, "filters": view.filters,
+            "created_at": fmt(view.created_at)}
+
+@router.get("/tickets/search")
+def search_tickets(page: int = Query(1, ge=1, le=100000),
+                   page_size: int = Query(20, ge=10, le=100),
+                   q: str = Query("", max_length=100),
+                   status: STATUS_FILTER | None = None,
+                   priority: Literal["P1", "P2", "P3", "P4"] | None = None,
+                   sort: SORT_FILTER = "newest",
+                   active: bool = False,
+                   user: User = Depends(current_user),
+                   db: Session = Depends(get_db)):
+    query = (select(Ticket)
+             .join(Site, Site.id == Ticket.site_id)
+             .join(Asset, Asset.id == Ticket.asset_id)
+             .outerjoin(User, User.id == Ticket.assignee_id))
+    if user.role == "client":
+        query = query.where(Ticket.org_id == user.org_id)
+    elif user.role == "engineer":
+        query = query.where(Ticket.assignee_id == user.id)
+    if status:
+        query = query.where(Ticket.status == status)
+    if priority:
+        query = query.where(Ticket.priority == priority)
+    if active:
+        query = query.where(Ticket.status.in_(OPEN))
+    term = q.strip()
+    if term:
+        # Escape LIKE wildcards to make a literal search predictable.
+        escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        match = "%" + escaped + "%"
+        query = query.where(or_(
+            Ticket.id.ilike(match, escape="\\"),
+            Ticket.description.ilike(match, escape="\\"),
+            Site.name.ilike(match, escape="\\"),
+            Asset.name.ilike(match, escape="\\"),
+            User.name.ilike(match, escape="\\"),
+        ))
+    total = db.scalar(query.with_only_columns(func.count(Ticket.id)).order_by(None)) or 0
+    if sort == "priority":
+        query = query.order_by(Ticket.priority.asc(), Ticket.resolution_deadline.asc(), Ticket.id.desc())
+    elif sort == "deadline":
+        query = query.order_by(Ticket.resolution_deadline.asc(), Ticket.id.desc())
+    else:
+        query = query.order_by(Ticket.created_at.desc(), Ticket.id.desc())
+    rows = db.scalars(query.offset((page - 1) * page_size).limit(page_size)).all()
+    return {"items": [serialize_ticket(db, ticket) for ticket in rows],
+            "page": page, "page_size": page_size, "total": total,
+            "pages": (total + page_size - 1) // page_size}
+
+@router.get("/tickets/views")
+def list_ticket_views(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    views = db.scalars(select(TicketView).where(TicketView.user_id == user.id)
+                       .order_by(TicketView.created_at.asc(), TicketView.id.asc())).all()
+    return [view_json(view) for view in views]
+
+@router.post("/tickets/views", status_code=201)
+def create_ticket_view(data: TicketViewInput, user: User = Depends(current_user),
+                       db: Session = Depends(get_db)):
+    # Lock user row so simultaneous writes cannot exceed the per-user view limit.
+    db.scalar(select(User).where(User.id == user.id).with_for_update())
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(422, detail="Название представления обязательно")
+    count = db.scalar(select(func.count(TicketView.id)).where(TicketView.user_id == user.id))
+    if count >= 12:
+        raise HTTPException(409, detail="Не более 12 сохранённых представлений")
+    view = TicketView(user_id=user.id, name=name, filters=data.filters.model_dump(exclude_none=True))
+    db.add(view)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, detail="Представление с таким названием уже существует")
+    db.refresh(view)
+    return view_json(view)
+
+@router.delete("/tickets/views/{view_id}")
+def delete_ticket_view(view_id: str, user: User = Depends(current_user),
+                       db: Session = Depends(get_db)):
+    view = db.scalar(select(TicketView).where(TicketView.id == view_id,
+                                             TicketView.user_id == user.id))
+    if not view:
+        raise HTTPException(404, detail="Представление не найдено")
+    db.delete(view)
+    db.commit()
+    return {"deleted": True}
 
 @router.get("/tickets/{ticket_id}")
 def ticket_detail(ticket_id: str, user: User = Depends(current_user),

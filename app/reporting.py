@@ -138,10 +138,24 @@ def operations(user: User = Depends(STAFF), db: Session = Depends(get_db)):
     unresolved = db.scalar(select(func.count(Ticket.id)).where(
         Ticket.status.notin_(("closed", "cancelled")))) or 0
     alerts = db.scalar(select(func.count(Event.id)).where(Event.type.in_(BREACH_TYPES))) or 0
+    oldest = db.scalar(select(func.min(Outbox.created_at)).where(Outbox.sent_at.is_(None)))
+    last_event = db.scalar(select(func.max(Event.at)))
+    unassigned = db.scalar(select(func.count(Ticket.id)).where(
+        Ticket.assignee_id.is_(None), Ticket.status.in_((
+            "new", "triage", "assigned", "accepted", "in_progress", "approval", "returned")))) or 0
+    critical = db.scalar(select(func.count(Ticket.id)).where(
+        Ticket.priority == "P1", Ticket.status.notin_(("closed", "cancelled")))) or 0
+    current = now()
     return {
         "pending_mock_notifications": pending,
         "active_sla_pauses": pauses,
         "open_tickets": unresolved,
         "recorded_breach_events": alerts,
+        "unassigned_open_tickets": unassigned,
+        "open_p1_tickets": critical,
+        "oldest_pending_mock_at": oldest.isoformat() if oldest else None,
+        "oldest_pending_mock_age_seconds": max(0, int((current - aware(oldest)).total_seconds())) if oldest else None,
+        "last_event_at": last_event.isoformat() if last_event else None,
+        "observed_at": current.isoformat(),
         "note": "Mock notifications remain in outbox; there is no external delivery configured.",
     }
