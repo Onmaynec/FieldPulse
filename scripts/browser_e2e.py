@@ -74,12 +74,34 @@ def main():
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context(service_workers="allow")
         page = context.new_page()
+        errors = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("console", lambda message: errors.append("console: " + message.text) if message.type == "error" else None)
         page.goto(ROOT, wait_until="networkidle", timeout=40000)
-        expect(page.locator("#login")).to_be_visible()
+        try:
+            expect(page.locator("#login")).to_be_visible()
+        except AssertionError:
+            print("Browser startup diagnostics:", {
+                "page_errors": errors[:12],
+                "login_hidden": page.locator("#login").get_attribute("hidden"),
+                "shell_hidden": page.locator("#shell").get_attribute("hidden"),
+                "toast": page.locator("#toast").inner_text(),
+                "script": page.locator('script[src*="app.js"]').get_attribute("src")
+            })
+            raise
         page.locator('#login-form [name="email"]').fill(email)
         page.locator('#login-form [name="password"]').fill(PASSWORD)
         page.locator('#login-form button[type="submit"]').click()
-        expect(page.locator('button[data-work-ticket="%s"]' % ticket["id"])).to_be_visible(timeout=25000)
+        try:
+            expect(page.locator('button[data-work-ticket="%s"]' % ticket["id"])).to_be_visible(timeout=25000)
+        except AssertionError:
+            print("Browser after login:", {
+                "page_errors": errors[:12],
+                "content": page.locator("#content").inner_text()[:1000],
+                "toast": page.locator("#toast").inner_text(),
+                "shell_hidden": page.locator("#shell").get_attribute("hidden"),
+            })
+            raise
         page.evaluate("async () => { await navigator.serviceWorker.ready; return true; }")
         if not page.evaluate("() => Boolean(navigator.serviceWorker.controller)"):
             page.reload(wait_until="domcontentloaded")
