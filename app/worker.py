@@ -37,7 +37,8 @@ def run_once(db: Session):
                 key = "sla:%s:%s:breach" % (t.id, stage)
             elif current >= due - timedelta(minutes=10):
                 kind = "sla_" + stage + "_warning"
-                key = "sla:%s:%s:warning" % (t.id, stage)
+                # After a justified pause changes the deadline, a new warning is valid.
+                key = "sla:%s:%s:warning:%s" % (t.id, stage, due.isoformat())
             else:
                 continue
             if db.scalar(select(Event.id).where(Event.event_key == key)):
