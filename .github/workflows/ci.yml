@@ -60,12 +60,20 @@ jobs:
           docker compose exec -T api python -m app.maintenance --limit 10
           docker compose exec -T api python scripts/load_profile.py --tickets 2 --photos-per-ticket 1 --workers 2 --allow-writes --output /tmp/fieldpulse-load.json
           docker cp "$(docker compose ps -q api):/tmp/fieldpulse-load.json" fieldpulse-load.json
+          docker compose exec -T api python scripts/load_profile.py --tickets 200 --photos-per-ticket 5 --workers 8 --allow-writes --output /tmp/fieldpulse-load-target.json
+          docker cp "$(docker compose ps -q api):/tmp/fieldpulse-load-target.json" fieldpulse-load-target.json
+          test_ticket=$(docker compose exec -T api python scripts/worker_restart_smoke.py prepare)
+          docker compose exec -T api python scripts/worker_restart_smoke.py await "$test_ticket"
+          docker compose restart worker
+          docker compose exec -T api python scripts/worker_restart_smoke.py verify "$test_ticket"
       - name: Publish small load-profile artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: fieldpulse-v03-load-smoke
-          path: fieldpulse-load.json
+          path: |
+            fieldpulse-load.json
+            fieldpulse-load-target.json
           if-no-files-found: ignore
       - name: Show logs on error
         if: failure()
