@@ -21,6 +21,8 @@ def env():
         b = Organization(id=uid(), name="B")
         db.add_all([svc,a,b])
         pwd = hash_password("test-pass")
+        admin = User(id=uid(), org_id=svc.id, role="admin", name="Admin",
+                     email="admin@test.local", password_hash=pwd)
         dispatcher = User(id=uid(), org_id=svc.id, role="dispatcher", name="Dispatcher",
                           email="dispatcher@test.local", password_hash=pwd)
         engineer = User(id=uid(), org_id=svc.id, role="engineer", name="Engineer",
@@ -31,7 +33,7 @@ def env():
                         email="a@test.local", password_hash=pwd)
         client_b = User(id=uid(), org_id=b.id, role="client", name="Client B",
                         email="b@test.local", password_hash=pwd)
-        db.add_all([dispatcher,engineer,wrong,client_a,client_b])
+        db.add_all([admin,dispatcher,engineer,wrong,client_a,client_b])
         sa=Site(id=uid(),org_id=a.id,name="Site A",city="Moscow",area="north",timezone="Europe/Moscow")
         sb=Site(id=uid(),org_id=b.id,name="Site B",city="Moscow",area="south",timezone="Europe/Moscow")
         db.add_all([sa,sb])
