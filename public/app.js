@@ -34,7 +34,7 @@ const safe = value => String(value == null ? "" : value).replace(/[&<>"']/g, c =
 const short = id => safe(String(id || "").slice(0,8).toUpperCase());
 const date = (v,zone) => {if(!v) return "—";try{return new Intl.DateTimeFormat("ru-RU",{dateStyle:"short",timeStyle:"short",timeZone:zone||"Europe/Moscow"}).format(new Date(v));}catch{return "—";}};
 const status = s => '<span class="status '+safe(s)+'">'+safe(STATUS[s]||s)+'</span>';
-const priority = p => '<span class="priority '+safe((p||"").toLowerCase())+'">● '+safe(p)+'</span>';
+const priority = p => '<span class="priority '+safe((p||"").toLowerCase())+'">'+safe(p)+'</span>';
 const toast = (message,error=false) => {const el=$("#toast");el.textContent=message;el.className="toast visible"+(error?" error":"");clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>el.classList.remove("visible"),4200);};
 const csrf = () => {const entry=document.cookie.split("; ").find(x=>x.startsWith("fp_csrf="));return entry?decodeURIComponent(entry.slice(8)):"";};
 async function api(path, options={}){
@@ -87,29 +87,44 @@ function table(items){
 }
 
 function overview(){
-  const r=state.report;const a=state.tickets;const mine=state.user.role==="engineer";const count=a.filter(t=>!["closed","cancelled"].includes(t.status)).length;
-  const headline=state.user.role==="client"?"Контроль обслуживания":mine?"Мои выездные задачи":"Весь сервис на одной панели";
-  const greeting=pageHead("ОПЕРАЦИОННЫЙ ОБЗОР",headline,"Актуальные заявки, сроки и рабочие процессы в режиме реального времени.",
-      state.user.role==="engineer"?'<button class="btn btn-primary" data-page="mobile">↗ Перейти к задачам</button>':
-      '<button class="btn btn-primary" data-create-ticket>＋ Новая заявка</button>');
-  const cards='<div class="stats">'+stat("Всего заявок",r?r.total:a.length,"Зарегистрировано в системе","▣")+
-    stat("В работе",r?r.open:count,"Требуют внимания","◷")+
-    stat("Закрыто",r?r.closed:a.filter(x=>x.status==="closed").length,"Завершённые обращения","✓")+
-    stat(r?"Нарушения SLA":"Ожидают назначения",r?r.breached_percent+"%":a.filter(x=>!x.assignee_id).length,
-         r?"Процент заявок с нарушением":"Не распределены по исполнителям","↗",true)+'</div>';
-  const recent=panel("Последние обращения","Недавние изменения в заявках",table(a.slice(0,7)),
-                   '<button class="btn btn-outline" data-page="tickets">Все заявки ↗</button>');
-  const statuses=Object.keys(STATUS).filter(x=>["new","triage","assigned","accepted","in_progress","approval","closed"].includes(x));
-  const total=Math.max(1,a.length);
-  const activity='<div class="panel-body"><div class="activity">'+statuses.map(k=>{
-    const n=a.filter(x=>x.status===k).length;
-    return '<div class="activity-item"><span class="activity-dot">◦</span><div style="flex:1"><b>'+STATUS[k]+' <span style="float:right">'+n+'</span></b>'+
-      '<div class="progress-meter"><span style="width:'+Math.round(n/total*100)+'%"></span></div></div></div>';
-  }).join("")+'</div></div>';
-  return greeting+cards+'<div class="intro-banner"><div><h2>Работа без остановок</h2><p>Проверяйте историю, версии документов и рабочие сроки для каждой заявки.</p></div>'+
+  const r=state.report;
+  const all=state.tickets;
+  const mine=state.user.role==="engineer";
+  const active=all.filter(t=>!["closed","cancelled"].includes(t.status));
+  const headline=state.user.role==="client"?"Контроль обслуживания":mine?"Мои выездные задачи":"Сервис под контролем";
+  const header=pageHead("ОПЕРАЦИОННЫЙ ОБЗОР",headline,"Актуальные обращения, исполнители и сроки на одном экране.",
+    mine?'<button class="btn btn-primary" data-page="mobile">↗ Перейти к заданиям</button>':
+    '<button class="btn btn-primary" data-create-ticket>＋ Создать заявку</button>');
+  const summary='<div class="stats">'+
+    stat("Всего заявок",r?r.total:all.length,"В доступном вам реестре","▣")+
+    stat("Открытые",r?r.open:active.length,"Требуют выполнения","◷")+
+    stat("Закрыто",r?r.closed:all.filter(t=>t.status==="closed").length,"Работы завершены","✓")+
+    stat(r?"Нарушения SLA":"Не назначены",r?r.breached_percent+"%":active.filter(t=>!t.assignee_id).length,
+      r?"Доля заявок с нарушением":"Ожидают исполнителя","↗",true)+'</div>';
+  const upcoming=active.filter(t=>t.resolution_deadline).sort((a,b)=>new Date(a.resolution_deadline)-new Date(b.resolution_deadline)).slice(0,6);
+  const watchlist=panel("Под контролем","Ближайшие сроки из доступных загруженных заявок",
+    '<div class="watchlist">'+(upcoming.length?upcoming.map(t=>
+    '<button type="button" class="watchlist-row" data-ticket="'+safe(t.id)+'"><span class="watchlist-head"><b>#'+short(t.id)+'</b>'+
+    priority(t.priority)+'</span><span class="watchlist-description">'+safe(t.site)+' · '+safe(t.asset)+'</span>'+
+    '<span class="watchlist-date">'+date(t.resolution_deadline,t.timezone)+' · '+slaDeadline(t)+'</span></button>').join(""):
+    '<div class="empty">Нет активных заявок со сроком SLA.</div>')+'</div>');
+  const recent=panel("Последние обращения","Последние изменения в доступном реестре",table(all.slice(0,7)),
+    '<button class="btn btn-outline" data-page="tickets">Весь реестр ↗</button>');
+  const steps=["new","triage","assigned","accepted","in_progress","approval","closed"];
+  const total=Math.max(1,all.length);
+  const distribution=panel("Этапы обслуживания","Распределение загруженных заявок по статусам",
+    '<div class="panel-body"><div class="activity">'+steps.map(key=>{
+      const count=all.filter(t=>t.status===key).length;
+      return '<div class="activity-item"><span class="activity-dot">◦</span><div><b>'+STATUS[key]+'<span class="activity-total">'+count+'</span></b>'+
+      '<div class="progress-meter" role="progressbar" aria-label="'+STATUS[key]+'" aria-valuemin="0" aria-valuemax="'+all.length+'" aria-valuenow="'+count+'"><span style="width:'+Math.round(count/total*100)+'%"></span></div></div></div>';
+    }).join("")+'</div></div>');
+  return header+summary+
+    '<div class="intro-banner"><div><span class="eyebrow">FIELD OPERATIONS / V0.4</span><h2>Вся работа — в едином потоке</h2>'+
+    '<p>Следите за изменениями заявок, документами, назначениями и SLA без переключения между системами.</p></div>'+
     '<button class="btn btn-primary" data-page="'+(mine?"mobile":"tickets")+'">Открыть рабочий список ↗</button></div>'+
-    '<div class="layout-two">'+recent+panel("Распределение заявок","Текущая структура по статусам",activity)+'</div>';
+    '<div class="layout-two">'+recent+watchlist+'</div>'+distribution;
 }
+
 function filteredTickets(){
   const match=state.filter.trim().toLocaleLowerCase("ru");
   const filtered=state.tickets.filter(t=>
@@ -176,14 +191,28 @@ function sitesPage(){
 }
 
 function actsPage(){
-  const a=state.acts;
-  return pageHead("ДОКУМЕНТООБОРОТ","Акты и согласование","Каждое решение сохраняет предыдущие редакции документа.")+
-    panel("История актов",a.length+" редакций",
-    a.length?'<div class="table-wrap"><table class="table"><thead><tr><th>АКТ</th><th>ЗАЯВКА</th><th>РЕДАКЦИЯ</th><th>СТАТУС</th><th>ДАТА</th><th>ДЕЙСТВИЕ</th></tr></thead><tbody>'+
-    a.map(x=>'<tr><td class="title-cell">#'+short(x.id)+'</td><td class="clickable" data-ticket="'+safe(x.ticket_id)+'">#'+short(x.ticket_id)+'</td><td>v'+x.version+'</td><td>'+status(x.status)+'</td><td>'+date(x.created_at)+'</td>'+
-    '<td><button class="btn btn-outline" data-act="'+safe(x.id)+'">Просмотр ↗</button></td></tr>').join("")+'</tbody></table></div>':
-    '<div class="empty">Акты появятся здесь после выполнения работ.</div>');
+  const records=state.acts;
+  const pending=records.filter(x=>x.status==="pending");
+  const accepted=records.filter(x=>x.status==="accepted");
+  const rejected=records.filter(x=>x.status==="rejected");
+  const drafts=records.filter(x=>x.status==="draft");
+  const summary='<div class="stats">'+
+    stat("Всего редакций",records.length,"Доступные вашей роли акты","▣")+
+    stat("На согласовании",pending.length,"Ожидают решения","◷",true)+
+    stat("Принято",accepted.length,"Подтверждённые акты","✓")+
+    stat("Возвращено",rejected.length,"Для повторной доработки","↶")+'</div>';
+  const note='<div class="intro-banner"><div><h2>Каждое решение имеет историю</h2>'+
+    '<p>Возврат создаёт новую редакцию акта. Доступ к документам разграничен по ролям и организациям.</p></div>'+
+    '<span class="mobile-state">'+drafts.length+' черновиков</span></div>';
+  const listing=records.length?'<div class="table-wrap"><table class="table"><thead><tr><th>АКТ</th><th>ЗАЯВКА</th><th>РЕДАКЦИЯ</th><th>СТАТУС</th><th>ДАТА</th><th>ДЕЙСТВИЕ</th></tr></thead><tbody>'+
+    records.map(x=>'<tr><td class="title-cell">#'+short(x.id)+'</td><td><button class="ticket-cell" data-ticket="'+safe(x.ticket_id)+'">#'+short(x.ticket_id)+'</button></td>'+
+    '<td>v'+x.version+'</td><td>'+status(x.status)+'</td><td>'+date(x.created_at)+'</td>'+
+    '<td><button class="btn btn-outline" data-act="'+safe(x.id)+'">Открыть акт ↗</button></td></tr>').join("")+'</tbody></table></div>':
+    '<div class="empty"><div class="empty-icon">▣</div><strong>Акты пока не созданы</strong><span>После выполнения работ они появятся здесь.</span></div>';
+  return pageHead("ДОКУМЕНТООБОРОТ","Акты и согласование","Редакции, результаты работ и история согласования.")+
+    summary+note+panel("Журнал актов",records.length+" доступных редакций",listing);
 }
+
 function reportsPage(){
   const r=state.report||{total:0,open:0,breached_percent:0,repeat_percent:0,load:[]};
   const load=[...(r.load||[])].sort((a,b)=>b.count-a.count).slice(0,18);const max=Math.max(...load.map(a=>a.count),1);
