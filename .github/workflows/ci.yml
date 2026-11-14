@@ -15,7 +15,7 @@ jobs:
       - name: Install
         run: pip install -r requirements-dev.txt
       - name: Compile Python
-        run: python -m compileall -q app tests migrations
+        run: python -m compileall -q app tests migrations scripts
       - name: Check critical lint rules
         run: ruff check app tests --select E4,E7,E9,F63,F7,F82
       - name: Test
@@ -49,6 +49,18 @@ jobs:
           docker compose run --rm seed
           docker compose exec -T api python -c "from app.db import SessionLocal; from app.models import Ticket,Site; from sqlalchemy import select,func; db=SessionLocal(); assert db.scalar(select(func.count(Ticket.id)))==2000; assert db.scalar(select(func.count(Site.id)))==120; db.close()"
           docker compose exec -T api python scripts/smoke.py
+          docker compose exec -T api python -m app.backup create /tmp/fieldpulse-ci-backup.zip
+          docker compose exec -T api python -m app.backup verify /tmp/fieldpulse-ci-backup.zip
+          docker compose exec -T api python -m app.maintenance --limit 10
+          docker compose exec -T api python scripts/load_profile.py --tickets 2 --photos-per-ticket 1 --workers 2 --allow-writes --output /tmp/fieldpulse-load.json
+          docker cp "$(docker compose ps -q api):/tmp/fieldpulse-load.json" fieldpulse-load.json
+      - name: Publish small load-profile artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fieldpulse-v03-load-smoke
+          path: fieldpulse-load.json
+          if-no-files-found: ignore
       - name: Show logs on error
         if: failure()
         run: docker compose logs --tail 150
