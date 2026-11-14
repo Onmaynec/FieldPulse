@@ -165,8 +165,13 @@ function updateTicketResults(){
 }
 async function changeTicketQuery(){
   state.ticketPage=1;state.activeViewId="";
+  const chips=$(".saved-views");if(chips)chips.outerHTML=viewOptions();
   const box=$("#ticket-table");if(box)box.innerHTML='<div class="registry-loading" role="status">Загрузка отфильтрованных заявок…</div>';
-  try{await loadTicketPage();}catch(err){toast(err.message,true);}
+  try{await loadTicketPage();}
+  catch(err){
+    const current=$("#ticket-table");if(current)current.innerHTML='<div class="empty">Не удалось загрузить заявки. Измените фильтр или попробуйте снова.</div>';
+    toast(err.message,true);
+  }
 }
 function viewOptions(){
   return '<div class="saved-views"><span>Представления:</span>'+
@@ -275,7 +280,15 @@ function reportsPage(){
     panel("SLA по объектам","Список приоритетных объектов с нарушениями",'<div class="table-wrap"><table class="table"><thead><tr><th>ОБЪЕКТ</th><th>ЗАЯВКИ</th><th>НАРУШЕНИЯ</th><th>РЕАКЦИЯ P95</th></tr></thead><tbody>'+
       sites.map(s=>'<tr><td>'+safe(s.site)+'</td><td>'+s.total+'</td><td>'+s.breach_count+' ('+s.breach_percent+'%)</td><td>'+safe(s.reaction_p95_minutes??"—")+' мин</td></tr>').join("")+'</tbody></table></div>')+
     panel("Операционное состояние","Исторические события и локальный mock inbox",'<div class="panel-body"><div class="activity">'+
-      [["Активные паузы SLA",ops.active_sla_pauses],["Незавершённые заявки",ops.open_tickets],["Зарегистрированные нарушения",ops.recorded_breach_events],["Сообщения без внешней доставки",ops.pending_mock_notifications]].map(x=>
+      [["Активные паузы SLA",ops.active_sla_pauses],
+       ["Незавершённые заявки",ops.open_tickets],
+       ["Без назначенного инженера",ops.unassigned_open_tickets],
+       ["Активные заявки P1",ops.open_p1_tickets],
+       ["Зарегистрированные нарушения",ops.recorded_breach_events],
+       ["Сообщения без внешней доставки",ops.pending_mock_notifications],
+       ["Возраст самой старой записи mock inbox",ops.oldest_pending_mock_age_seconds==null?"Очередь пуста":ops.oldest_pending_mock_age_seconds+" сек"],
+       ["Последнее зафиксированное событие",ops.last_event_at?date(ops.last_event_at):"Нет событий"]
+      ].map(x=>
       '<div class="activity-item"><span class="activity-dot">◉</span><div><b>'+x[0]+'</b><small>'+safe(x[1]??"—")+'</small></div></div>').join("")+'</div></div>');
 }
 function inboxPage(){
@@ -743,7 +756,10 @@ async function loginSubmit(form){
 async function logout(){
   try{await api("/auth/logout",{method:"POST"});}catch{}
   if(state.eventStream)state.eventStream.close();
-  state.user=null;state.ticketViews=[];state.activeViewId="";sessionStorage.removeItem("fieldpulse-current-user");
+  state.user=null;state.ticketViews=[];state.activeViewId="";
+  state.filter="";state.ticketStatus="";state.ticketPriority="";
+  state.ticketSort="newest";state.ticketPage=1;state.ticketPageSize=20;
+  sessionStorage.removeItem("fieldpulse-current-user");
   closeModal();viewAuth();
 }
 async function init(){
