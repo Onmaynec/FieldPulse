@@ -80,10 +80,9 @@ def main():
         page.locator('#login-form [name="password"]').fill(PASSWORD)
         page.locator('#login-form button[type="submit"]').click()
         expect(page.locator('button[data-work-ticket="%s"]' % ticket["id"])).to_be_visible(timeout=25000)
-        page.evaluate("""async () => {
-          await navigator.serviceWorker.ready;
-          if (!navigator.serviceWorker.controller) location.reload();
-        }""")
+        page.evaluate("async () => { await navigator.serviceWorker.ready; return true; }")
+        if not page.evaluate("() => Boolean(navigator.serviceWorker.controller)"):
+            page.reload(wait_until="domcontentloaded")
         expect(page.locator('button[data-work-ticket="%s"]' % ticket["id"])).to_be_visible(timeout=25000)
         context.set_offline(True)
         save_work(page, ticket["id"], "Offline work with two images", with_photos=True)
