@@ -62,11 +62,11 @@ jobs:
           docker cp "$(docker compose ps -q api):/tmp/fieldpulse-load.json" fieldpulse-load.json
           docker compose exec -T api python scripts/load_profile.py --tickets 200 --photos-per-ticket 5 --workers 8 --allow-writes --output /tmp/fieldpulse-load-target.json
           docker cp "$(docker compose ps -q api):/tmp/fieldpulse-load-target.json" fieldpulse-load-target.json
-          test_ticket=$(docker compose exec -T api python scripts/worker_restart_smoke.py prepare)
-          docker compose exec -T api python scripts/worker_restart_smoke.py await "$test_ticket"
+          test_ticket=$(docker compose exec -T api python -m scripts.worker_restart_smoke prepare)
+          docker compose exec -T api python -m scripts.worker_restart_smoke await "$test_ticket"
           docker compose restart worker
-          docker compose exec -T api python scripts/worker_restart_smoke.py verify "$test_ticket"
-      - name: Publish small load-profile artifact
+          docker compose exec -T api python -m scripts.worker_restart_smoke verify "$test_ticket"
+      - name: Publish load-profile artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
