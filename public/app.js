@@ -5,8 +5,8 @@ const $$ = (selector, scope = document) => Array.from(scope.querySelectorAll(sel
 const state = {user:null, page:"overview", tickets:[], sites:[], acts:[], report:null, selected:null, timeline:[], suggestions:[], filter:"", eventStream:null, localTasks:[]};
 const ROLE = {admin:"Администратор",manager:"Руководитель",dispatcher:"Диспетчер",engineer:"Инженер",client:"Клиент"};
 const STATUS = {new:"Новая",triage:"Триаж",assigned:"Назначена",accepted:"Принята",in_progress:"В работе",approval:"Согласование",returned:"Возврат",closed:"Закрыта",cancelled:"Отменена"};
-const ICON = {overview:"◈",tickets:"▤",sites:"▦",mobile:"⬡",acts:"▣",reports:"◫",inbox:"◉"};
-const TITLE = {overview:"Обзор",tickets:"Заявки",sites:"Объекты",mobile:"Мобильное рабочее место",acts:"Акты выполненных работ",reports:"Аналитика",inbox:"Уведомления"};
+const ICON = {overview:"◈",tickets:"▤",sites:"▦",mobile:"⬡",acts:"▣",reports:"◫",inbox:"◉",admin:"⚙"};
+const TITLE = {overview:"Обзор",tickets:"Заявки",sites:"Объекты",mobile:"Мобильное рабочее место",acts:"Акты выполненных работ",reports:"Аналитика",inbox:"Уведомления",admin:"Администрирование"};
 const CHECKS = {electrical:["isolation","voltage","result"],hvac:["filter","pressure","result"],low_voltage:["connection","signal","result"]};
 const CHECK_LABEL = {isolation:"Безопасное отключение",voltage:"Проверка напряжения",result:"Проверка результата",filter:"Состояние фильтра",pressure:"Давление системы",connection:"Подключение",signal:"Проверка сигнала",inspection:"Осмотр"};
 const safe = value => String(value == null ? "" : value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -29,7 +29,7 @@ function viewAuth(){const logged=Boolean(state.user);$("#login").hidden=logged;$
 function navItems(){
   if(state.user.role==="engineer")return ["overview","tickets","mobile","acts"];
   if(state.user.role==="client")return ["overview","tickets","sites","acts"];
-  return ["overview","tickets","sites","reports","acts","inbox"];
+  return state.user.role==="admin" ? ["overview","tickets","sites","reports","acts","inbox","admin"] : ["overview","tickets","sites","reports","acts","inbox"];
 }
 function setIdentity(){
   $("#user-name").textContent=state.user.name;$("#user-role").textContent=ROLE[state.user.role]||state.user.role;
@@ -248,13 +248,90 @@ async function workTicket(id){
     '<label>Фотографии (до 5 файлов по 10 МБ)<input type="file" name="photos" accept="image/jpeg,image/png,image/webp" multiple></label>'+
     '<button type="submit" class="btn btn-primary btn-wide">Сохранить локально <span>↗</span></button></div></form>');
 }
+function adminPage(){
+  const summary=state.adminSummary||{sites:0,assets:0,contracts:0,policies:0,engineers:0};
+  const staff=state.engineers||[];
+  const sites=state.sites||[];
+  return pageHead("СИСТЕМНОЕ УПРАВЛЕНИЕ","Администрирование","Справочники объектов, договорные SLA, персонал и импорт данных.")+
+    '<div class="stats">'+stat("Объекты",summary.sites,"Подключённые здания","▦")+
+    stat("Оборудование",summary.assets,"Активы в реестре","▣")+
+    stat("Договоры",summary.contracts,"Рабочие календари","◷")+
+    stat("Инженеры",summary.engineers,"Профили специалистов","⬡",true)+'</div>'+
+    '<div class="layout-two">'+
+      panel("Импорт данных из CSV","Проверка до сохранения · ограничение 2 МиБ",
+        '<div class="panel-body"><form id="admin-import-form" class="form-stack">'+
+        '<label>Тип данных<select name="kind"><option value="sites">Объекты</option><option value="assets">Оборудование</option><option value="contracts">Договоры и SLA</option></select></label>'+
+        '<label>CSV в UTF-8<input name="file" type="file" accept=".csv,text/csv" required></label>'+
+        '<label style="display:flex;align-items:center;gap:9px"><input type="checkbox" name="dry_run" checked> Только проверить (без записи в БД)</label>'+
+        '<button class="btn btn-primary" type="submit">Проверить / импортировать ↗</button></form>'+
+        '<p class="muted" id="admin-import-result" style="font-size:11px;margin-top:12px">Сначала загрузите объекты, затем оборудование и договоры.</p></div>')+
+      panel("Договорные политики","Новые версии не меняют старые SLA-снимки",
+        '<div class="panel-body"><div class="form-stack"><label>Объект<select id="admin-site-select">'+
+        sites.map(x=>'<option value="'+safe(x.id)+'" '+(x.id===state.adminSite?"selected":"")+'>'+safe(x.name)+'</option>').join("")+
+        '</select></label><button class="btn btn-dark" data-edit-policy>Настроить SLA и календарь ↗</button>'+
+        '<p class="muted" style="font-size:11px">Изменение договора применяется к новым обращениям. События прежних заявок остаются неизменными.</p></div></div>')+
+    '</div>'+
+    panel("Команда инженеров","Навыки, доступность и рабочие смены",
+      '<div class="table-wrap"><table class="table"><thead><tr><th>ИНЖЕНЕР</th><th>КОМПЕТЕНЦИИ</th><th>РАЙОН</th><th>ДОСТУПНОСТЬ</th><th>НАСТРОЙКА</th></tr></thead><tbody>'+
+      staff.map(x=>'<tr><td class="title-cell">'+safe(x.name)+'</td><td>'+safe(x.skills.join(", "))+'</td><td>'+safe(x.area)+'</td><td>'+
+      (x.active?'<span class="status closed">Активен</span>':'<span class="status cancelled">Отключён</span>')+'</td>'+
+      '<td><button class="btn btn-outline" data-edit-engineer="'+safe(x.id)+'">Редактировать ↗</button></td></tr>').join("")+
+      '</tbody></table></div>')+
+    panel("Административный журнал","История изменения политик, персонала и импорта",
+      '<div class="panel-body"><div class="activity">'+(state.adminAudit||[]).map(a=>
+      '<div class="activity-item"><span class="activity-dot">◉</span><div><b>'+safe(a.action)+' / '+safe(a.target)+'</b>'+
+      '<small>'+date(a.created_at)+'</small></div></div>').join("")+
+      '</div></div>');
+}
+async function adminPolicyModal(){
+  const siteId=$("#admin-site-select")?.value||state.adminSite||state.sites[0]?.id;
+  if(!siteId)return toast("Сначала добавьте объект",true);
+  state.adminSite=siteId;
+  const existing=await api("/admin/contracts/"+encodeURIComponent(siteId));
+  const week=existing.calendar?.week||Object.fromEntries(Array.from({length:5},(_,i)=>[String(i),[["09:00","18:00"]]]));
+  const policy=existing.policies?.P1||{reaction_minutes:30,resolution_minutes:240,allowed_pauses:["awaiting_access"]};
+  const dayNames=["Понедельник","Вторник","Среда","Четверг","Пятница","Суббота","Воскресенье"];
+  const form='<form id="admin-policy-form" data-site="'+safe(siteId)+'" class="form-stack">'+
+    '<label>Приоритет<select name="priority">'+["P1","P2","P3","P4"].map(x=>
+      '<option value="'+x+'">'+x+'</option>').join("")+'</select></label>'+
+    '<div class="form-grid"><div class="field"><label>Реакция, рабочих минут<input type="number" name="reaction_minutes" min="1" max="100800" value="'+policy.reaction_minutes+'" required></label></div>'+
+    '<div class="field"><label>Решение, рабочих минут<input type="number" name="resolution_minutes" min="1" max="100800" value="'+policy.resolution_minutes+'" required></label></div></div>'+
+    '<h3 class="subheading">РАБОЧИЙ КАЛЕНДАРЬ · '+safe(existing.timezone)+'</h3>'+
+    dayNames.map((name,index)=>{const entries=week[String(index)]||[],active=entries.length>0,start=entries[0]?.[0]||"09:00",end=entries[0]?.[1]||"18:00";
+      return '<div class="form-grid" style="align-items:center"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="day-'+index+'" '+(active?"checked":"")+'> '+name+'</label>'+
+      '<div class="form-grid"><div class="field"><input type="time" name="day-start-'+index+'" value="'+safe(start)+'"></div><div class="field"><input type="time" name="day-end-'+index+'" value="'+safe(end)+'"></div></div></div>';}).join("")+
+    '<label>Выходные и праздники (YYYY-MM-DD через запятую)<textarea name="holidays" rows="2">'+safe((existing.calendar?.holidays||[]).join(", "))+'</textarea></label>'+
+    '<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="awaiting_access" checked> Разрешить паузу «ожидание доступа»</label>'+
+    '<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="awaiting_parts"> Разрешить паузу «ожидание деталей»</label>'+
+    '<p class="muted" style="font-size:11px">Форма поддерживает один интервал на день. Для сложных календарей используйте API, иначе предыдущие интервалы будут заменены.</p>'+
+    '<button class="btn btn-primary btn-wide" type="submit">Сохранить новую редакцию SLA ↗</button></form>';
+  modal("Редактор политики SLA",form);
+}
+function adminEngineerModal(id){
+  const e=(state.engineers||[]).find(x=>x.id===id);
+  if(!e)return;
+  const skills=["electrical","hvac","low_voltage"];
+  const body='<div class="section-kicker">'+safe(e.name)+'</div><form id="admin-profile-form" data-id="'+safe(id)+'" class="form-stack">'+
+    '<label>Район обслуживания<input name="area" value="'+safe(e.area)+'" required maxlength="80"></label>'+
+    '<div><div class="overline">КОМПЕТЕНЦИИ</div>'+skills.map(s=>
+      '<label class="checklist-row"><input name="skill" type="checkbox" value="'+s+'" '+(e.skills.includes(s)?"checked":"")+'> '+s+'</label>').join("")+'</div>'+
+    '<label style="display:flex;gap:8px;align-items:center"><input name="active" type="checkbox" '+(e.active?"checked":"")+'> Активен</label>'+
+    '<button class="btn btn-primary" type="submit">Сохранить профиль</button></form>'+
+    '<h3 class="subheading">ДОБАВИТЬ СМЕНУ</h3>'+
+    '<form id="admin-shift-form" data-id="'+safe(id)+'" class="form-stack"><label>Начало смены<input type="datetime-local" name="starts_at" required></label>'+
+    '<label>Конец смены<input type="datetime-local" name="ends_at" required></label><button class="btn btn-dark" type="submit">Добавить смену ↗</button></form>'+
+    '<h3 class="subheading">ПОСЛЕДНИЕ СМЕНЫ</h3>'+e.shifts.map(x=>
+      '<p class="muted" style="font-size:11px">'+date(x.starts_at)+' — '+date(x.ends_at)+'</p>').join("");
+  modal("Профиль инженера",body);
+}
 function updateNetwork(){
   $("#network-led").classList.toggle("offline",!navigator.onLine);
   $("#network-label").textContent=navigator.onLine?"Соединение активно":"Нет соединения";
 }
-async function dbOpen(){
+async function dbOpen(databaseName){
+  if(!databaseName&&!state.user?.id)throw new Error("Требуется вход для локального хранилища");
   return new Promise((resolve,reject)=>{
-    const request=indexedDB.open("FieldPulseOfflineV1",1);
+    const request=indexedDB.open(databaseName||("FieldPulseOfflineV2-"+state.user.id),1);
     request.onupgradeneeded=()=>{const db=request.result;db.createObjectStore("tasks",{keyPath:"id"});db.createObjectStore("queue",{keyPath:"uuid"});};
     request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
   });
@@ -269,9 +346,33 @@ async function storeOp(name,mode,op){
 const dbAll=name=>storeOp(name,"readonly",o=>o.getAll());
 const dbPut=(name,value)=>storeOp(name,"readwrite",o=>o.put(value));
 const dbDel=(name,key)=>storeOp(name,"readwrite",o=>o.delete(key));
+async function migrateLegacy(){
+  // Preserve offline work by migrating only records associated with the signed-in engineer.
+  if(state.user?.role!=="engineer"||typeof indexedDB.databases!=="function")return;
+  if(!(await indexedDB.databases()).some(x=>x.name==="FieldPulseOfflineV1"))return;
+  const old=await dbOpen("FieldPulseOfflineV1");
+  function readOld(name,mode,fn){
+    return new Promise((resolve,reject)=>{
+      const tx=old.transaction(name,mode),req=fn(tx.objectStore(name));
+      req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+    });
+  }
+  try{
+    const tasks=await readOld("tasks","readonly",o=>o.getAll());
+    const mine=tasks.filter(t=>t.assignee_id===state.user.id);
+    const authorized=new Set(mine.map(t=>t.id));
+    const queue=(await readOld("queue","readonly",o=>o.getAll())).filter(x=>authorized.has(x.ticket_id));
+    for(const t of mine)await dbPut("tasks",t);
+    for(const x of queue)await dbPut("queue",x);
+    for(const t of mine)await readOld("tasks","readwrite",o=>o.delete(t.id));
+    for(const x of queue)await readOld("queue","readwrite",o=>o.delete(x.uuid));
+  }finally{old.close();}
+}
 async function cacheTasks(){
   if(!navigator.onLine)return;
   const rows=await api("/tickets?limit=500");
+  const allowed=new Set(rows.filter(t=>t.assignee_id===state.user.id).map(t=>t.id));
+  for(const saved of await dbAll("tasks"))if(!allowed.has(saved.id))await dbDel("tasks",saved.id);
   for(const t of rows)if(t.assignee_id===state.user.id){
     try{t.required=(await api("/tickets/"+t.id+"/checklist")).required;}catch{t.required=CHECKS[t.asset_kind]||[];}
     await dbPut("tasks",t);
@@ -322,6 +423,10 @@ async function refresh(){
       if(state.page==="inbox")state.notifications=await api("/notifications");
     }
     if(state.page==="acts")state.acts=await api("/acts");
+    if(state.page==="admin" && role==="admin"){
+      [state.adminSummary,state.engineers,state.adminAudit]=await Promise.all([
+        api("/admin/summary"),api("/admin/engineers"),api("/admin/audit?limit=12")]);
+    }
     if(role==="engineer")await cacheTasks();
   }catch(err){
     if(state.page!=="mobile"&&!navigator.onLine){toast("Нет сети. Перейдите в мобильное рабочее место.",true);}
@@ -345,6 +450,7 @@ function render(){
   if(state.page==="acts")el.innerHTML=actsPage();
   if(state.page==="reports")el.innerHTML=reportsPage();
   if(state.page==="inbox")el.innerHTML=inboxPage();
+  if(state.page==="admin")el.innerHTML=adminPage();
 }
 async function connectEvents(){
   if(state.eventStream)state.eventStream.close();
@@ -360,7 +466,8 @@ async function loginSubmit(form){
   const user=await api("/auth/login",{method:"POST",body:obj});
   state.user=user;sessionStorage.setItem("fieldpulse-current-user",JSON.stringify(user));
   state.page=user.role==="engineer"?"mobile":"overview";
-  viewAuth();await setPage(state.page);connectEvents();
+  viewAuth();if(user.role==="engineer")await migrateLegacy();
+  await setPage(state.page);connectEvents();
   if(user.role==="engineer")await sync();
 }
 async function logout(){
@@ -375,7 +482,9 @@ async function init(){
   try{state.user=await api("/auth/me");sessionStorage.setItem("fieldpulse-current-user",JSON.stringify(state.user));}
   catch{if(!navigator.onLine){try{state.user=JSON.parse(sessionStorage.getItem("fieldpulse-current-user")||"null");}catch{}}}
   viewAuth();
-  if(state.user){state.page=state.user.role==="engineer"?"mobile":"overview";await setPage(state.page);connectEvents();}
+  if(state.user){state.page=state.user.role==="engineer"?"mobile":"overview";
+    if(state.user.role==="engineer")await migrateLegacy();
+    await setPage(state.page);connectEvents();}
 }
 document.addEventListener("click",async event=>{
   const el=event.target.closest("button,[data-ticket]");
@@ -384,6 +493,8 @@ document.addEventListener("click",async event=>{
     if(el.matches("[data-page]")){await setPage(el.dataset.page);return;}
     if(el.matches("[data-close]")){closeModal();return;}
     if(el.matches("[data-create-ticket]")){await createTicketModal();return;}
+    if(el.matches("[data-edit-policy]")){await adminPolicyModal();return;}
+    if(el.matches("[data-edit-engineer]")){adminEngineerModal(el.dataset.editEngineer);return;}
     if(el.matches("[data-demo]")){$("#login-form [name=email]").value=el.dataset.demo;$("#login-form [name=password]").value="FieldPulseDemo!2026";return;}
     if(el.matches("[data-ticket]")){await details(el.dataset.ticket);return;}
     if(el.matches("[data-act]")){await actModal(el.dataset.act);return;}
@@ -425,10 +536,41 @@ document.addEventListener("click",async event=>{
 });
 document.addEventListener("submit",async event=>{
   const form=event.target;
-  if(!["login-form","create-ticket-form","work-form"].includes(form.id))return;
+  if(!["login-form","create-ticket-form","work-form","admin-import-form","admin-policy-form","admin-profile-form","admin-shift-form"].includes(form.id))return;
   event.preventDefault();
   try{
     if(form.id==="login-form"){await loginSubmit(form);return;}
+    if(form.id==="admin-import-form"){
+      const fd=new FormData();fd.append("file",form.elements.file.files[0]);
+      const kind=form.elements.kind.value;
+      const dry=form.elements.dry_run.checked;
+      const result=await api("/admin/import/"+kind+"?dry_run="+dry,{method:"POST",body:fd});
+      const message=(dry?"Проверено, без изменений: ":"Импортировано: ")+result.created_or_updated;
+      toast(message);await refresh();$("#admin-import-result").textContent=message;
+      return;
+    }
+    if(form.id==="admin-policy-form"){
+      const fd=new FormData(form),week={};
+      for(let i=0;i<7;i++)if(fd.has("day-"+i))week[String(i)]=[[String(fd.get("day-start-"+i)),String(fd.get("day-end-"+i))]];
+      const holidays=String(fd.get("holidays")||"").split(",").map(x=>x.trim()).filter(Boolean);
+      const payload={reaction_minutes:Number(fd.get("reaction_minutes")),resolution_minutes:Number(fd.get("resolution_minutes")),
+        week,holidays,allowed_pauses:["awaiting_access","awaiting_parts"].filter(x=>fd.has(x))};
+      await api("/admin/contracts/"+form.dataset.site+"/policies/"+fd.get("priority"),{method:"PUT",body:payload});
+      closeModal();toast("Новая редакция политики SLA создана");await refresh();return;
+    }
+    if(form.id==="admin-profile-form"){
+      const fd=new FormData(form);
+      await api("/admin/engineers/"+form.dataset.id+"/profile",{method:"PUT",
+        body:{skills:fd.getAll("skill"),area:String(fd.get("area")),active:fd.has("active")}});
+      closeModal();toast("Профиль обновлён");await refresh();return;
+    }
+    if(form.id==="admin-shift-form"){
+      const fd=new FormData(form);
+      const starts_at=new Date(String(fd.get("starts_at"))).toISOString();
+      const ends_at=new Date(String(fd.get("ends_at"))).toISOString();
+      await api("/admin/engineers/"+form.dataset.id+"/shifts",{method:"POST",body:{starts_at,ends_at}});
+      closeModal();toast("Смена сохранена");await refresh();return;
+    }
     if(form.id==="create-ticket-form"){
       const data=Object.fromEntries(new FormData(form));const photo=data.photo;delete data.photo;
       const t=await api("/tickets",{method:"POST",headers:{"Idempotency-Key":crypto.randomUUID()},body:data});
@@ -452,7 +594,7 @@ document.addEventListener("submit",async event=>{
     }
   }catch(err){$("#login-error").textContent=form.id==="login-form"?err.message:"";toast(err.message,true);}
 });
-document.addEventListener("change",e=>{if(e.target.id==="new-site")loadAssets();if(e.target.id==="ticket-status-filter"){
+document.addEventListener("change",e=>{if(e.target.id==="admin-site-select")state.adminSite=e.target.value;if(e.target.id==="new-site")loadAssets();if(e.target.id==="ticket-status-filter"){
   const value=e.target.value;$("#ticket-table").innerHTML=table(state.tickets.filter(t=>(!state.filter||JSON.stringify(t).toLowerCase().includes(state.filter.toLowerCase()))&&(!value||t.status===value)));}});
 document.addEventListener("input",e=>{if(e.target.id==="ticket-search"){
   state.filter=e.target.value;const selected=$("#ticket-status-filter")?.value;

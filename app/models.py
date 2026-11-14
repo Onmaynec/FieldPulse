@@ -121,6 +121,7 @@ class Worklog(Base):
     ticket_id = Column(String(32), ForeignKey("tickets.id"), nullable=False, index=True)
     engineer_id = Column(String(32), ForeignKey("users.id"), nullable=False)
     action_uuid = Column(String(36), nullable=False)
+    request_hash = Column(String(64), nullable=True)
     summary = Column(String(2000), nullable=False, default="")
     checklist = Column(JSON, nullable=False, default=dict)
     materials = Column(JSON, nullable=False, default=list)
@@ -186,4 +187,14 @@ class AuthAttempt(Base):
     __tablename__ = "auth_attempts"
     id = Column(Integer, primary_key=True, autoincrement=True)
     fingerprint = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=now)
+
+
+class AdminAudit(Base):
+    __tablename__ = "admin_audit"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    actor_id = Column(String(32), ForeignKey("users.id"), nullable=False)
+    action = Column(String(80), nullable=False)
+    target = Column(String(160), nullable=False)
+    data = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), nullable=False, default=now)

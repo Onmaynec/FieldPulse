@@ -48,6 +48,7 @@ jobs:
           curl -fsS http://localhost:8000/health/ready
           docker compose run --rm seed
           docker compose exec -T api python -c "from app.db import SessionLocal; from app.models import Ticket,Site; from sqlalchemy import select,func; db=SessionLocal(); assert db.scalar(select(func.count(Ticket.id)))==2000; assert db.scalar(select(func.count(Site.id)))==120; db.close()"
+          docker compose exec -T api python scripts/smoke.py
       - name: Show logs on error
         if: failure()
         run: docker compose logs --tail 150

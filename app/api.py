@@ -5,7 +5,6 @@ import os
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from statistics import median
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -22,7 +21,7 @@ from .security import (
     access_site, access_ticket, current_user, roles, signer, hash_password,
     verify_password
 )
-from .sla import aware, deadline, snapshot
+from .sla import aware, deadline, snapshot, working_minutes
 
 router = APIRouter(prefix="/api/v1")
 OPEN = ("new", "triage", "assigned", "accepted", "in_progress", "approval", "returned")
@@ -196,7 +195,7 @@ def assets(site_id: str, user: User = Depends(current_user), db: Session = Depen
 @router.get("/tickets")
 def tickets(status: str | None = None, limit: int = Query(100, ge=1, le=500),
             user: User = Depends(current_user), db: Session = Depends(get_db)):
-    q = select(Ticket).order_by(Ticket.created_at.desc()).limit(limit)
+    q = select(Ticket).order_by(Ticket.created_at.desc(), Ticket.id.desc()).limit(limit)
     if user.role == "client":
         q = q.where(Ticket.org_id == user.org_id)
     elif user.role == "engineer":
@@ -526,7 +525,8 @@ def percentile(values, fraction):
 @router.get("/reports/overview")
 def overview(user: User = Depends(roles(*STAFF)), db: Session = Depends(get_db)):
     items = db.scalars(select(Ticket)).all()
-    reactions = [round((aware(t.accepted_at) - aware(t.created_at)).total_seconds() / 60, 2)
+    reactions = [round(working_minutes(t.created_at, t.accepted_at,
+                                        t.policy_snapshot["calendar"]), 2)
                  for t in items if t.accepted_at]
     breaching = db.scalars(select(Event.ticket_id).where(
         Event.type.in_(("sla_reaction_breached", "sla_resolution_breached"))).distinct()).all()
