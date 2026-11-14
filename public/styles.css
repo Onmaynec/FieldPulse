@@ -333,3 +333,12 @@ input[type=file]::file-selector-button{background:var(--soft-accent);color:var(-
 .skeleton-card{height:135px}
 @keyframes skeleton-sheen{to{transform:translateX(100%)}}
 @media(max-width:800px){.skeleton-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.skeleton-card:last-child{display:none}}
+
+/* Checklist evidence is derived from server worklog records. */
+.checklist-progress{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:var(--surface-alt);margin:11px 0}
+.checklist-progress strong{font-size:17px;font-weight:850;color:var(--ink);font-variant-numeric:tabular-nums}
+.checklist-progress span{font-size:10px;color:var(--muted)}
+.detail-checklist{display:grid;gap:8px}
+.check-row{display:flex;gap:9px;align-items:center;padding:8px 10px;border-radius:9px;border:1px solid var(--line);background:var(--surface);font-size:12px;color:var(--sub)}
+.check-mark{display:inline-grid;place-items:center;width:24px;height:24px;flex:0 0 24px;border-radius:7px;background:var(--surface-alt);color:var(--quiet);font-size:14px;font-weight:800}
+.check-mark.done{background:var(--green-soft);color:var(--green)}

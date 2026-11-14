@@ -282,10 +282,11 @@ async function loadAssets(){
 }
 async function details(id){
   const t=await api("/tickets/"+encodeURIComponent(id));state.selected=t;
-  const [history,photos,logs]=await Promise.all([
+  const [history,photos,logs,checklist]=await Promise.all([
     api("/tickets/"+encodeURIComponent(id)+"/timeline"),
     api("/tickets/"+encodeURIComponent(id)+"/attachments"),
     api("/tickets/"+encodeURIComponent(id)+"/worklogs"),
+    api("/tickets/"+encodeURIComponent(id)+"/checklist"),
   ]);
   state.timeline=history;
   const canStaff=["admin","dispatcher","manager"].includes(state.user.role);
@@ -307,6 +308,16 @@ async function details(id){
       '<img loading="lazy" alt="Фотография заявки '+short(t.id)+'" src="/api/v1/attachments/'+encodeURIComponent(p.id)+'?thumb=true">'+
       '<span>Фото '+short(p.id)+' · '+Math.round(p.size/1024)+' КиБ</span></a>').join("")+'</div>':
     '<div class="empty empty-compact">Фотографии пока не добавлены.</div>';
+  const completedChecks=Object.create(null);
+  for(const record of logs)for(const [key,value] of Object.entries(record.checklist||{}))
+    if(value===true)completedChecks[key]=true;
+  const requiredChecks=checklist.required||[];
+  const checksDone=requiredChecks.filter(key=>completedChecks[key]===true).length;
+  const checklistView='<div class="checklist-progress" aria-label="Проверок выполнено '+checksDone+' из '+requiredChecks.length+'"><strong>'+
+    checksDone+' / '+requiredChecks.length+'</strong><span>проверок подтверждено</span></div>'+
+    '<div class="detail-checklist">'+requiredChecks.map(key=>
+      '<div class="check-row"><span class="check-mark '+(completedChecks[key]===true?"done":"")+'">'+
+      (completedChecks[key]===true?"✓":"○")+'</span><span>'+safe(CHECK_LABEL[key]||key)+'</span></div>').join("")+'</div>';
   const chronology=history.length?history.map(e=>
     '<div class="timeline-entry"><b>'+safe(e.type.replaceAll("_"," "))+'</b><small>'+date(e.at,t.timezone)+'</small>'+
     (e.data&&(e.data.text||e.data.reason)?'<p>'+safe(e.data.text||e.data.reason)+'</p>':"")+'</div>').join(""):
@@ -327,6 +338,7 @@ async function details(id){
     '<div class="detail-subgrid"><section><h3 class="subheading">Хронология событий <span>'+history.length+'</span></h3>'+
     '<div class="timeline">'+chronology+'</div></section>'+
     '<section><h3 class="subheading">Фотографии <span>'+photos.length+'</span></h3>'+gallery+
+    '<h3 class="subheading">Проверки <span>'+checksDone+'/'+requiredChecks.length+'</span></h3>'+checklistView+
     '<h3 class="subheading">Выполненные работы <span>'+logs.length+'</span></h3>'+work+'</section></div>'+
     '<div class="detail-comment field"><label>Комментарий<textarea id="new-comment" rows="2" maxlength="2000" placeholder="Добавить запись в историю"></textarea></label>'+
     (state.user.role!=="client"?'<label class="checklist-row"><input type="checkbox" id="comment-internal"> Внутренний комментарий</label>':"")+
