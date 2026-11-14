@@ -215,12 +215,22 @@ function inboxPage(){
       notifications.map(n=>'<div class="activity-item"><span class="activity-dot">◉</span><div><b>'+safe(n.subject)+'</b><small>'+date(n.at)+' / '+safe(n.recipient)+'</small><p style="font-size:11px">'+safe(n.body)+'</p></div></div>').join(""):
       '<div class="empty">Новые уведомления появятся по мере приближения SLA.</div>')+'</div></div>');
 }
+let previousModalFocus=null;
 function modal(title,body,foot="",small=false){
-  $("#modal-root").innerHTML='<div class="modal-overlay" id="overlay"><section class="modal '+(small?"sm":"")+'" role="dialog" aria-modal="true" aria-label="'+safe(title)+'">'+
-  '<header class="modal-head"><div><div class="section-kicker">FIELD PULSE / WORKSPACE</div><h2>'+safe(title)+'</h2></div><button class="modal-close" data-close>×</button></header>'+
+  if(!$("#modal-root").querySelector(".modal"))previousModalFocus=document.activeElement;
+  $("#modal-root").innerHTML='<div class="modal-overlay" id="overlay"><section class="modal '+(small?"sm":"")+'" role="dialog" aria-modal="true" aria-labelledby="modal-title">'+
+  '<header class="modal-head"><div><div class="section-kicker">FIELD PULSE / WORKSPACE</div><h2 id="modal-title">'+safe(title)+'</h2></div><button type="button" class="modal-close" data-close aria-label="Закрыть окно">×</button></header>'+
   '<div class="modal-content">'+body+'</div>'+(foot?'<div class="modal-foot">'+foot+'</div>':"")+'</section></div>';
+  document.body.classList.add("modal-open");
+  $("#modal-root .modal-close").focus();
 }
-function closeModal(){$("#modal-root").innerHTML="";}
+function closeModal(){
+  const wasOpen=Boolean($("#modal-root .modal"));
+  $("#modal-root").innerHTML="";
+  document.body.classList.remove("modal-open");
+  if(wasOpen&&previousModalFocus?.isConnected)previousModalFocus.focus();
+  previousModalFocus=null;
+}
 async function createTicketModal(){
   if(!state.sites.length)state.sites=await api("/sites");
   if(!state.sites.length)return toast("Нет доступных объектов",true);
@@ -450,8 +460,12 @@ function adminEngineerModal(id){
   modal("Профиль инженера",body);
 }
 function updateNetwork(){
-  $("#network-led").classList.toggle("offline",!navigator.onLine);
-  $("#network-label").textContent=navigator.onLine?"Соединение активно":"Нет соединения";
+  const online=navigator.onLine;
+  $("#network-led").classList.toggle("offline",!online);
+  $("#network-label").textContent=online?"Соединение активно":"Нет соединения";
+  const indicator=$("#live-state");
+  if(indicator){indicator.innerHTML="<i></i> "+(online?"ONLINE":"OFFLINE");indicator.classList.toggle("offline",!online);
+    indicator.setAttribute("aria-label",online?"Система подключена":"Нет подключения к сети");}
 }
 async function dbOpen(databaseName){
   if(!databaseName&&!state.user?.id)throw new Error("Требуется вход для локального хранилища");
@@ -588,7 +602,7 @@ async function setPage(page){
   setIdentity();
   if(page==="mobile"){try{$("#content").innerHTML=await mobilePage();}catch(err){toast(err.message,true);}}
   else {await refresh();}
-  if(window.innerWidth<800)$(".sidebar").classList.remove("open");
+  if(window.innerWidth<=800)closeSidebar();
 }
 function render(){
   setIdentity();const el=$("#content");
@@ -642,6 +656,15 @@ document.addEventListener("click",async event=>{
   if(!el)return;
   try{
     if(el.matches("[data-page]")){await setPage(el.dataset.page);return;}
+    if(el.matches("[data-theme]")){
+      ui.theme=el.dataset.theme;savePrefs();applyAppearance();return;
+    }
+    if(el.matches("[data-density]")){
+      ui.density=el.dataset.density;savePrefs();applyAppearance();return;
+    }
+    if(el.matches("[data-ticket-page]")){
+      state.ticketPage=Number(el.dataset.ticketPage);updateTicketResults();return;
+    }
     if(el.matches("[data-close]")){closeModal();return;}
     if(el.matches("[data-create-ticket]")){await createTicketModal();return;}
     if(el.matches("[data-edit-policy]")){await adminPolicyModal();return;}
@@ -773,14 +796,59 @@ document.addEventListener("change",e=>{
       ['awaiting_access','awaiting_parts'].forEach(k=>$('input[name="'+k+'"]',e.target.form).checked=policy.allowed_pauses.includes(k));
     }
   }
-  if(e.target.id==="admin-site-select")state.adminSite=e.target.value;if(e.target.id==="new-site")loadAssets();if(e.target.id==="ticket-status-filter"){
-  const value=e.target.value;$("#ticket-table").innerHTML=table(state.tickets.filter(t=>(!state.filter||JSON.stringify(t).toLowerCase().includes(state.filter.toLowerCase()))&&(!value||t.status===value)));}});
-document.addEventListener("input",e=>{if(e.target.id==="ticket-search"){
-  state.filter=e.target.value;const selected=$("#ticket-status-filter")?.value;
-  $("#ticket-table").innerHTML=table(state.tickets.filter(t=>(!state.filter||JSON.stringify(t).toLowerCase().includes(state.filter.toLowerCase()))&&(!selected||t.status===selected)));}});
+  if(e.target.id==="admin-site-select")state.adminSite=e.target.value;
+  if(e.target.id==="new-site")loadAssets();
+  if(e.target.id==="ticket-status-filter"){state.ticketStatus=e.target.value;state.ticketPage=1;updateTicketResults();}
+  if(e.target.id==="ticket-priority-filter"){state.ticketPriority=e.target.value;state.ticketPage=1;updateTicketResults();}
+  if(e.target.id==="ticket-sort"){state.ticketSort=e.target.value;state.ticketPage=1;updateTicketResults();}
+});
+document.addEventListener("input",e=>{
+  if(e.target.id==="ticket-search"){state.filter=e.target.value;state.ticketPage=1;updateTicketResults();}
+  if(e.target.id==="site-search"){
+    state.siteFilter=e.target.value;
+    const siteGrid=$("#site-grid");if(siteGrid)siteGrid.innerHTML=siteCards();
+    const count=$("#site-count");if(count)count.textContent=state.sites.filter(s=>[s.name,s.city,s.area,s.timezone].some(x=>String(x||"").toLocaleLowerCase("ru").includes(state.siteFilter.trim().toLocaleLowerCase("ru")))).length+" найдено";
+  }
+});
+function closeSidebar(){
+  const sidebar=$(".sidebar"),backdrop=$("#sidebar-backdrop"),menu=$("#menu-toggle");
+  sidebar.classList.remove("open");backdrop.hidden=true;
+  menu.setAttribute("aria-expanded","false");menu.setAttribute("aria-label","Открыть меню");
+}
+function toggleSidebar(){
+  const sidebar=$(".sidebar"),backdrop=$("#sidebar-backdrop"),menu=$("#menu-toggle");
+  const opening=!sidebar.classList.contains("open");
+  sidebar.classList.toggle("open",opening);backdrop.hidden=!opening;
+  menu.setAttribute("aria-expanded",String(opening));
+  menu.setAttribute("aria-label",opening?"Закрыть меню":"Открыть меню");
+}
 $("#logout").addEventListener("click",logout);
-$("#menu-toggle").addEventListener("click",()=>$(".sidebar").classList.toggle("open"));
+$("#menu-toggle").addEventListener("click",toggleSidebar);
+$("#sidebar-backdrop").addEventListener("click",closeSidebar);
+$("#global-search").addEventListener("click",async()=>{
+  if(!state.user)return;
+  await setPage("tickets");$("#ticket-search")?.focus();
+});
 window.addEventListener("online",()=>{updateNetwork();if(state.user&&state.user.role==="engineer")sync();else if(state.user)refresh();connectEvents();});
 window.addEventListener("offline",()=>{updateNetwork();if(state.eventStream)state.eventStream.close();});
-document.addEventListener("keydown",e=>{if(e.key==="Escape")closeModal();});
+document.addEventListener("keydown",e=>{
+  const dialog=$("#modal-root .modal");
+  if(e.key==="Escape"){
+    if(dialog){e.preventDefault();closeModal();}
+    else if($(".sidebar").classList.contains("open"))closeSidebar();
+    return;
+  }
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"&&state.user){
+    e.preventDefault();$("#global-search").click();return;
+  }
+  if(e.key==="Tab"&&dialog){
+    const focusable=$('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',dialog)
+      .filter(el=>el.getClientRects().length>0);
+    if(!focusable.length)return;
+    const first=focusable[0],last=focusable[focusable.length-1];
+    if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+    else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+  }
+});
+applyAppearance();
 init().catch(err=>toast(err.message,true));
