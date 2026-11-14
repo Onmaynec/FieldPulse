@@ -43,8 +43,8 @@ def main():
         page.locator('#ticket-view-form [name="name"]').fill("CI · новые P1")
         page.locator('#ticket-view-form button[type="submit"]').click()
         expect(page.locator(".saved-views [data-ticket-view]")).to_have_count(2, timeout=12000)
-        saved_id = page.evaluate("() => state.ticketViews[0].id")
-        assert saved_id
+        saved_id = page.locator(".saved-views [data-ticket-view]").last.get_attribute("data-ticket-view")
+        assert saved_id, "The saved view is not in the visible registry"
         page.locator('.nav-item[data-page="overview"]').click()
         expect(page.locator(".page-head h1")).to_be_visible()
         page.locator('.nav-item[data-page="tickets"]').click()
