@@ -192,6 +192,11 @@ def main():
                     timings[kind].append(milliseconds)
             except Exception as error:
                 errors.append(str(error)[:240])
+    duration_seconds = args.duration_hours * 3600
+    if duration_seconds:
+        remaining = duration_seconds - (time.perf_counter() - started)
+        if remaining > 0:
+            time.sleep(remaining)
     elapsed = max(0.001, time.perf_counter() - started)
     disk = shutil.disk_usage("/")
     report = {

@@ -4,6 +4,7 @@ Run inside the API container against a disposable seeded Compose stack.
 """
 import base64
 import io
+import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -26,7 +27,7 @@ def request_any(browser, method, path, payload):
     headers["X-CSRF-Token"] = csrf
     req = Request(
         "http://127.0.0.1:8000/api/v1" + path,
-        data=__import__("json").dumps(payload, ensure_ascii=False).encode(),
+        data=json.dumps(payload, ensure_ascii=False).encode(),
         headers=headers, method=method
     )
     try:
@@ -35,7 +36,7 @@ def request_any(browser, method, path, payload):
     except HTTPError as error:
         status, raw = error.code, error.read()
     try:
-        body = __import__("json").loads(raw)
+        body = json.loads(raw)
     except ValueError:
         body = raw
     return status, body
@@ -66,11 +67,6 @@ def check_assignment_cancel(client, dispatcher, engineer_id, site, asset):
     dispatcher2 = Browser()
     dispatcher2.login("dispatcher@fieldpulse.local")
     path = "/tickets/" + ticket["id"] + "/"
-    outcomes = race_two(
-        dispatcher, dispatcher2,
-        path + "assign", {"version": ticket["version"], "engineer_id": engineer_id},
-        {"version": ticket["version"], "engineer_id": engineer_id}
-    ) if False else None
     # Different endpoints share the same locked ticket and base version.
     barrier = Barrier(2)
 
@@ -144,10 +140,8 @@ def check_mobile_uuid_race(client, dispatcher, site, asset, engineer_email, engi
     results = [outcome[1]["results"][0] for outcome in outcomes]
     statuses = sorted(item["status"] for item in results)
     assert statuses == ["applied", "conflict"], outcomes
-    winner = next(item for item in actions if any(
-        result["status"] == "applied" and result["uuid"] == action_uuid
-        for result in results
-    ))
+    winner = next(action for action, outcome in zip(actions, outcomes)
+                  if outcome[1]["results"][0]["status"] == "applied")
     # The Worklog is globally unique per engineer/UUID even when ticket row
     # locks differ. A later replay of the winning payload is a duplicate.
     replay = engineer_a.request("POST", "/mobile/sync", {"actions": [winner]})
